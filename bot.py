@@ -2,25 +2,40 @@ import discord
 import os
 from dotenv import load_dotenv
 from openai import OpenAI
+from flask import Flask
+import threading
 
 load_dotenv()
 
+# 🔑 Keys
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 client_ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+# 🏷️ Settings
 ALLIANCE_NAME = "Memento Mori"
-
 VERIFIED_ROLE = "💨 ARC 1081"
-UNVERIFIED_ROLE = "Unverified"
+UNVERIFIED_ROLE = "@everyone"
 VERIFICATION_CHANNEL = "📸・verification"
 
+# 🤖 Discord bot
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
 bot = discord.Client(intents=intents)
 
+# 🌐 Web server (Render fix)
+app = Flask(__name__)
 
+@app.route("/")
+def home():
+    return "Bot is alive"
+
+def run_web():
+    app.run(host="0.0.0.0", port=10000)
+
+
+# 🤖 AI function
 def analyze_image(url):
     try:
         response = client_ai.responses.create(
@@ -29,9 +44,14 @@ def analyze_image(url):
                 {
                     "role": "user",
                     "content": [
-                        {"type": "input_text",
-                         "text": f"Check this screenshot. Alliance must be: {ALLIANCE_NAME}. APPROVED or REJECTED only."},
-                        {"type": "input_image", "image_url": url}
+                        {
+                            "type": "input_text",
+                            "text": f"Check this screenshot. Alliance must be {ALLIANCE_NAME}. Reply ONLY APPROVED or REJECTED."
+                        },
+                        {
+                            "type": "input_image",
+                            "image_url": url
+                        }
                     ]
                 }
             ]
@@ -43,6 +63,7 @@ def analyze_image(url):
         return "REJECTED"
 
 
+# 🔎 helper
 async def get_role(guild, name):
     for role in guild.roles:
         if role.name == name:
@@ -50,9 +71,10 @@ async def get_role(guild, name):
     return None
 
 
+# 🚀 bot events
 @bot.event
 async def on_ready():
-    print(f"Bot online as {bot.user}")
+    print(f"✅ Bot online als {bot.user}")
 
 
 @bot.event
@@ -69,10 +91,10 @@ async def on_message(message):
     attachment = message.attachments[0]
 
     if "image" not in (attachment.content_type or ""):
-        await message.channel.send("Only images allowed")
+        await message.channel.send("❌ Alleen afbeeldingen toegestaan.")
         return
 
-    await message.channel.send("Checking...")
+    await message.channel.send("🔍 Checking...")
 
     result = analyze_image(attachment.url)
 
@@ -94,4 +116,6 @@ async def on_message(message):
         await message.channel.send("🔴 Not verified.")
 
 
+# 🌐 start web + bot
+threading.Thread(target=run_web).start()
 bot.run(DISCORD_TOKEN)
