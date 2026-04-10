@@ -32,9 +32,7 @@ def home():
     return "Bot is alive"
 
 def run():
-import os
-
-app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
 
 def keep_alive():
     t = Thread(target=run)
@@ -62,6 +60,7 @@ def analyze_image(url):
             ]
         )
         return response.output_text.strip()
+
     except Exception as e:
         print("AI ERROR:", repr(e))
         return "REJECTED"
