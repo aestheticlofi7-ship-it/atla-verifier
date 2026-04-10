@@ -3,7 +3,7 @@ import os
 from dotenv import load_dotenv
 from openai import OpenAI
 from flask import Flask
-import threading
+from threading import Thread
 
 load_dotenv()
 
@@ -24,16 +24,19 @@ intents.members = True
 
 bot = discord.Client(intents=intents)
 
-# 🌐 Web server (Render fix)
+# 🌐 Web server (keep alive)
 app = Flask(__name__)
 
 @app.route("/")
 def home():
     return "Bot is alive"
 
-def run_web():
+def run():
     app.run(host="0.0.0.0", port=10000)
 
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
 
 # 🤖 AI function
 def analyze_image(url):
@@ -57,11 +60,9 @@ def analyze_image(url):
             ]
         )
         return response.output_text.strip()
-
     except Exception as e:
         print("AI ERROR:", repr(e))
         return "REJECTED"
-
 
 # 🔎 helper
 async def get_role(guild, name):
@@ -70,12 +71,10 @@ async def get_role(guild, name):
             return role
     return None
 
-
-# 🚀 bot events
+# 🚀 events
 @bot.event
 async def on_ready():
     print(f"✅ Bot online als {bot.user}")
-
 
 @bot.event
 async def on_message(message):
@@ -111,11 +110,9 @@ async def on_message(message):
             await member.remove_roles(unverified_role)
 
         await message.channel.send("🟢 Verified!")
-
     else:
         await message.channel.send("🔴 Not verified.")
 
-
-# 🌐 start web + bot
-threading.Thread(target=run_web).start()
+# 🚀 START EVERYTHING
+keep_alive()
 bot.run(DISCORD_TOKEN)
