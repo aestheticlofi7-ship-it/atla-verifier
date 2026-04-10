@@ -5,6 +5,17 @@ from openai import OpenAI
 
 load_dotenv()
 
+intents = discord.Intents.default()
+intents.message_content = True
+intents.members = True
+
+bot = discord.Client(intents=intents)import discord
+import os
+from dotenv import load_dotenv
+from openai import OpenAI
+
+load_dotenv()
+
 # 🔑 Keys (UIT .env)
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 client_ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -106,7 +117,9 @@ async def on_message(message):
         await message.channel.send("🟢 Verified!")
 
     else:
-        await message.channel.send("🔴 Not verified.")
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+
+bot.run(DISCORD_TOKEN)        await message.channel.send("🔴 Not verified.")
 
 
 bot.run(DISCORD_TOKEN)
