@@ -1,4 +1,8 @@
-import discord
+intents = discord.Intents.default()
+intents.message_content = True
+intents.members = True
+
+bot = discord.Client(intents=intents)import discord
 import os
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -113,7 +117,9 @@ async def on_message(message):
 
         if unverified_role:
             await member.remove_roles(unverified_role)
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 
+bot.run(DISCORD_TOKEN)
         await message.channel.send("🟢 Verified!")
 
     else:
