@@ -1,33 +1,15 @@
-intents = discord.Intents.default()
-intents.message_content = True
-intents.members = True
-
-bot = discord.Client(intents=intents)import discord
+import discord
 import os
 from dotenv import load_dotenv
 from openai import OpenAI
 
 load_dotenv()
 
-intents = discord.Intents.default()
-intents.message_content = True
-intents.members = True
-
-bot = discord.Client(intents=intents)import discord
-import os
-from dotenv import load_dotenv
-from openai import OpenAI
-
-load_dotenv()
-
-# 🔑 Keys (UIT .env)
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 client_ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# 🏷️ Alliance
 ALLIANCE_NAME = "Memento Mori"
 
-# 🧷 Settings
 VERIFIED_ROLE = "💨 ARC 1081"
 UNVERIFIED_ROLE = "Unverified"
 VERIFICATION_CHANNEL = "📸・verification"
@@ -47,19 +29,9 @@ def analyze_image(url):
                 {
                     "role": "user",
                     "content": [
-                        {
-                            "type": "input_text",
-                            "text": (
-                                f"Check this screenshot.\n"
-                                f"Alliance must be: {ALLIANCE_NAME}\n"
-                                "Only APPROVED if alliance is clearly visible.\n"
-                                "Otherwise REJECTED."
-                            )
-                        },
-                        {
-                            "type": "input_image",
-                            "image_url": url
-                        }
+                        {"type": "input_text",
+                         "text": f"Check this screenshot. Alliance must be: {ALLIANCE_NAME}. APPROVED or REJECTED only."},
+                        {"type": "input_image", "image_url": url}
                     ]
                 }
             ]
@@ -67,8 +39,8 @@ def analyze_image(url):
         return response.output_text.strip()
 
     except Exception as e:
-        print("🔥 AI ERROR:", repr(e))
-        return "REJECTED - AI ERROR"
+        print("AI ERROR:", repr(e))
+        return "REJECTED"
 
 
 async def get_role(guild, name):
@@ -80,7 +52,7 @@ async def get_role(guild, name):
 
 @bot.event
 async def on_ready():
-    print(f"✅ Bot is online als {bot.user}")
+    print(f"Bot online as {bot.user}")
 
 
 @bot.event
@@ -97,10 +69,10 @@ async def on_message(message):
     attachment = message.attachments[0]
 
     if "image" not in (attachment.content_type or ""):
-        await message.channel.send("❌ Alleen afbeeldingen toegestaan.")
+        await message.channel.send("Only images allowed")
         return
 
-    await message.channel.send("🔍 Checking alliance membership...")
+    await message.channel.send("Checking...")
 
     result = analyze_image(attachment.url)
 
@@ -111,21 +83,15 @@ async def on_message(message):
     unverified_role = await get_role(guild, UNVERIFIED_ROLE)
 
     if "APPROVED" in result.upper():
-
         if verified_role:
             await member.add_roles(verified_role)
-
         if unverified_role:
             await member.remove_roles(unverified_role)
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 
-bot.run(DISCORD_TOKEN)
         await message.channel.send("🟢 Verified!")
 
     else:
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-
-bot.run(DISCORD_TOKEN)        await message.channel.send("🔴 Not verified.")
+        await message.channel.send("🔴 Not verified.")
 
 
 bot.run(DISCORD_TOKEN)
