@@ -14,7 +14,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 client_ai = OpenAI(api_key=OPENAI_API_KEY)
 
-# ⚙️ Discord setup
+# ⚙️ DISCORD SETUP
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
@@ -22,7 +22,7 @@ intents.members = True
 bot = discord.Client(intents=intents)
 tree = discord.app_commands.CommandTree(bot)
 
-# 🌐 Flask keep-alive
+# 🌐 FLASK KEEP ALIVE
 app = Flask(__name__)
 
 @app.route("/")
@@ -34,13 +34,11 @@ def run_web():
     app.run(host="0.0.0.0", port=port)
 
 
-# 🧠 CONFIG STORAGE
+# 🧠 STORAGE
 guild_config = {}
-
-# 🧩 SETUP WIZARD STORAGE
 setup_sessions = {}
 
-# ⛔ anti spam / cache
+# ⛔ SAFETY SYSTEMS
 processed_images = set()
 user_cooldown = {}
 
@@ -58,6 +56,7 @@ def analyze_image(url, alliance_name):
                             "type": "input_text",
                             "text": f"""
 Check this screenshot.
+
 Alliance must be: {alliance_name}
 
 Reply ONLY:
@@ -79,58 +78,34 @@ APPROVED or REJECTED
         return "REJECTED"
 
 
+# =========================
 # 🔧 SLASH COMMANDS
-@tree.command(name="setup", description="Start full bot setup wizard")
+# =========================
+
+@tree.command(name="setup", description="Start setup wizard")
 async def setup(interaction: discord.Interaction):
     gid = interaction.guild.id
 
     setup_sessions[gid] = {
         "step": 0,
         "data": {},
-        "user": interaction.user.id
+        "user": interaction.user.id,
+        "channel_id": interaction.channel.id
     }
 
     await interaction.response.send_message(
-        "⚙️ **Setup started!**\nWhat is your **Alliance name**?",
+        "⚙️ **Setup started!**\n\nReply here:\nWhat is your **Alliance name**?",
         ephemeral=True
     )
 
 
-@tree.command(name="set_guest_role", description="Set guest role for rejected users")
+@tree.command(name="set_guest_role", description="Set guest role")
 async def set_guest_role(interaction: discord.Interaction, role: discord.Role):
     gid = interaction.guild.id
-    guild_config.setdefault(gid, {})
-
-    guild_config[gid]["guest_role"] = role.name
+    guild_config.setdefault(gid, {})["guest_role"] = role.id
 
     await interaction.response.send_message(
-        f"🟡 Guest role set to: {role.name}",
-        ephemeral=True
-    )
-
-
-@tree.command(name="set_alliance", description="Set alliance name")
-async def set_alliance(interaction: discord.Interaction, name: str):
-    gid = interaction.guild.id
-    guild_config.setdefault(gid, {})
-
-    guild_config[gid]["alliance"] = name
-
-    await interaction.response.send_message(
-        f"✅ Alliance set to: {name}",
-        ephemeral=True
-    )
-
-
-@tree.command(name="set_channel", description="Set verification channel")
-async def set_channel(interaction: discord.Interaction, channel: discord.TextChannel):
-    gid = interaction.guild.id
-    guild_config.setdefault(gid, {})
-
-    guild_config[gid]["channel"] = channel.name
-
-    await interaction.response.send_message(
-        f"📸 Verification channel: {channel.name}",
+        f"⭐ Guest role set to {role.mention}",
         ephemeral=True
     )
 
@@ -138,42 +113,66 @@ async def set_channel(interaction: discord.Interaction, channel: discord.TextCha
 @tree.command(name="set_role", description="Set verified role")
 async def set_role(interaction: discord.Interaction, role: discord.Role):
     gid = interaction.guild.id
-    guild_config.setdefault(gid, {})
-
-    guild_config[gid]["role"] = role.name
+    guild_config.setdefault(gid, {})["role"] = role.id
 
     await interaction.response.send_message(
-        f"🟢 Verified role: {role.name}",
+        f"🟢 Verified role set to {role.mention}",
         ephemeral=True
     )
 
 
-# 🤖 BOT READY
+@tree.command(name="set_channel", description="Set verification channel")
+async def set_channel(interaction: discord.Interaction, channel: discord.TextChannel):
+    gid = interaction.guild.id
+    guild_config.setdefault(gid, {})["channel"] = channel.id
+
+    await interaction.response.send_message(
+        f"📸 Verification channel set to {channel.mention}",
+        ephemeral=True
+    )
+
+
+@tree.command(name="set_alliance", description="Set alliance name")
+async def set_alliance(interaction: discord.Interaction, name: str):
+    gid = interaction.guild.id
+    guild_config.setdefault(gid, {})["alliance"] = name
+
+    await interaction.response.send_message(
+        f"✅ Alliance set to **{name}**",
+        ephemeral=True
+    )
+
+
+# =========================
+# 🤖 READY EVENT
+# =========================
+
 @bot.event
 async def on_ready():
     await tree.sync()
 
-    activity = discord.Activity(
-        type=discord.ActivityType.playing,
-        name="Use /setup to configure | Memento Guard"
+    await bot.change_presence(
+        activity=discord.Activity(
+            type=discord.ActivityType.playing,
+            name="/setup to start | Memento Guard"
+        )
     )
-
-    await bot.change_presence(activity=activity)
 
     print(f"✅ Bot online as {bot.user}")
 
 
-# 🤖 SETUP WIZARD FLOW
+# =========================
+# 🤖 SETUP + VERIFICATION
+# =========================
+
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
 
-    guild = message.guild
-    if not guild:
+    gid = message.guild.id if message.guild else None
+    if not gid:
         return
-
-    gid = guild.id
 
     # =========================
     # ⚙️ SETUP FLOW
@@ -184,47 +183,49 @@ async def on_message(message):
         if message.author.id != session["user"]:
             return
 
+        if message.channel.id != session["channel_id"]:
+            return
+
         step = session["step"]
 
         if step == 0:
             session["data"]["alliance"] = message.content
             session["step"] = 1
-            await message.channel.send("📸 Which **verification channel** should be used?")
+            await message.channel.send("📸 Mention verification channel:")
             return
 
         if step == 1:
-            session["data"]["channel"] = message.content
+            session["data"]["channel_id"] = message.channel_mentions[0].id if message.channel_mentions else None
             session["step"] = 2
-            await message.channel.send("🟢 Which **verified role** should users get?")
+            await message.channel.send("🟢 Mention verified role:")
             return
 
         if step == 2:
-            session["data"]["role"] = message.content
+            session["data"]["role_id"] = message.role_mentions[0].id if message.role_mentions else None
             session["step"] = 3
-            await message.channel.send("🟡 Which **guest role** should rejected users get?")
+            await message.channel.send("⭐ Mention guest role:")
             return
 
         if step == 3:
-            session["data"]["guest_role"] = message.content
+            session["data"]["guest_role_id"] = message.role_mentions[0].id if message.role_mentions else None
 
             guild_config[gid] = session["data"]
             del setup_sessions[gid]
 
-            await message.channel.send("✅ **Setup complete! Bot is ready.**")
+            await message.channel.send("✅ Setup complete! Bot is ready.")
             return
+
 
     # =========================
     # 🤖 IMAGE VERIFICATION
     # =========================
+
     if gid not in guild_config:
         return
 
     config = guild_config[gid]
 
-    if "channel" not in config:
-        return
-
-    if message.channel.name != config["channel"]:
+    if message.channel.id != config.get("channel_id"):
         return
 
     if not message.attachments:
@@ -251,35 +252,31 @@ async def on_message(message):
     alliance_name = config.get("alliance", "UNKNOWN")
     result = analyze_image(attachment.url, alliance_name)
 
-    role = discord.utils.get(guild.roles, name=config.get("role"))
-    guest_role = discord.utils.get(guild.roles, name=config.get("guest_role", "Guest"))
+    guild = message.guild
+
+    role = guild.get_role(config.get("role_id"))
+    guest_role = guild.get_role(config.get("guest_role_id"))
 
     # 🟢 APPROVED
     if "APPROVED" in result.upper():
-
         if role:
             await message.author.add_roles(role)
-
         if guest_role:
             await message.author.remove_roles(guest_role)
 
         await message.channel.send(
-            f"🔥 **APPROVED**\n"
-            f"{message.author.mention} Welcome Member — you have been verified successfully!"
+            f"🔥 {message.author.mention} **APPROVED** — Welcome Member!"
         )
 
     # ⭐ REJECTED
     else:
-
         if guest_role:
             await message.author.add_roles(guest_role)
-
         if role:
             await message.author.remove_roles(role)
 
         await message.channel.send(
-            f"⭐ **REJECTED**\n"
-            f"{message.author.mention} You have been assigned the Guest role."
+            f"⭐ {message.author.mention} **REJECTED** — Guest role assigned."
         )
 
 
