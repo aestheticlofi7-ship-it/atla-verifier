@@ -1,5 +1,6 @@
 import discord
 import os
+import asyncio
 from dotenv import load_dotenv
 from openai import OpenAI
 from flask import Flask
@@ -14,7 +15,6 @@ client_ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 # 🏷️ Settings
 ALLIANCE_NAME = "Memento Mori"
 VERIFIED_ROLE = "💨 ARC 1081"
-UNVERIFIED_ROLE = "@everyone"
 VERIFICATION_CHANNEL = "📸・verification"
 
 # 🤖 Discord bot
@@ -96,21 +96,24 @@ async def on_message(message):
 
     await message.channel.send("🔍 Checking...")
 
-    result = analyze_image(attachment.url)
+    # 🧠 AI call (non-blocking fix)
+    result = await asyncio.to_thread(analyze_image, attachment.url)
 
     guild = message.guild
     member = message.author
 
     verified_role = await get_role(guild, VERIFIED_ROLE)
-    unverified_role = await get_role(guild, UNVERIFIED_ROLE)
 
+    # 🟢 APPROVED
     if "APPROVED" in result.upper():
         if verified_role:
-            await member.add_roles(verified_role)
-        if unverified_role:
-            await member.remove_roles(unverified_role)
-
-        await message.channel.send("🟢 Verified!")
+            try:
+                await member.add_roles(verified_role)
+                await message.channel.send("🟢 Verified!")
+            except discord.Forbidden:
+                await message.channel.send("❌ Bot mist 'Manage Roles' permissies.")
+        else:
+            await message.channel.send("❌ Verified role niet gevonden.")
     else:
         await message.channel.send("🔴 Not verified.")
 
