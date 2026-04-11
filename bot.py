@@ -1,6 +1,6 @@
 import discord
 import os
-import asyncio
+import time
 from dotenv import load_dotenv
 from openai import OpenAI
 from flask import Flask
@@ -8,38 +8,42 @@ from threading import Thread
 
 load_dotenv()
 
-# 🔑 Keys
+# 🔑 ENV KEYS
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-client_ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# 🏷️ Settings
-ALLIANCE_NAME = "Memento Mori"
-VERIFIED_ROLE = "💨 ARC 1081"
-VERIFICATION_CHANNEL = "📸・verification"
+client_ai = OpenAI(api_key=OPENAI_API_KEY)
 
-# 🤖 Discord bot
+# ⚙️ Discord setup
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
 bot = discord.Client(intents=intents)
+tree = discord.app_commands.CommandTree(bot)
 
-# 🌐 Web server (keep alive)
+# 🌐 Flask keep-alive
 app = Flask(__name__)
 
 @app.route("/")
 def home():
     return "Bot is alive"
 
-def run():
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
 
-def keep_alive():
-    t = Thread(target=run)
-    t.start()
 
-# 🤖 AI function
-def analyze_image(url):
+# 🧠 CONFIG STORAGE (later database upgrade)
+guild_config = {}
+
+# ⛔ anti spam / cache
+processed_images = set()
+user_cooldown = {}
+
+
+# 🤖 AI CHECK
+def analyze_image(url, alliance_name):
     try:
         response = client_ai.responses.create(
             model="gpt-4o-mini",
@@ -49,7 +53,13 @@ def analyze_image(url):
                     "content": [
                         {
                             "type": "input_text",
-                            "text": f"Check this screenshot. Alliance must be {ALLIANCE_NAME}. Reply ONLY APPROVED or REJECTED."
+                            "text": f"""
+Check this screenshot.
+Alliance must be: {alliance_name}
+
+Reply ONLY:
+APPROVED or REJECTED
+"""
                         },
                         {
                             "type": "input_image",
@@ -59,30 +69,87 @@ def analyze_image(url):
                 }
             ]
         )
+
         return response.output_text.strip()
 
     except Exception as e:
         print("AI ERROR:", repr(e))
         return "REJECTED"
 
-# 🔎 helper
-async def get_role(guild, name):
-    for role in guild.roles:
-        if role.name == name:
-            return role
-    return None
 
-# 🚀 events
+# 🔧 SLASH COMMANDS
+@tree.command(name="set_alliance", description="Set alliance name")
+async def set_alliance(interaction: discord.Interaction, name: str):
+    gid = interaction.guild.id
+
+    if gid not in guild_config:
+        guild_config[gid] = {}
+
+    guild_config[gid]["alliance"] = name
+
+    await interaction.response.send_message(
+        f"✅ Alliance ingesteld op: {name}",
+        ephemeral=True
+    )
+
+
+@tree.command(name="set_channel", description="Set verification channel")
+async def set_channel(interaction: discord.Interaction, channel: discord.TextChannel):
+    gid = interaction.guild.id
+
+    if gid not in guild_config:
+        guild_config[gid] = {}
+
+    guild_config[gid]["channel"] = channel.name
+
+    await interaction.response.send_message(
+        f"📸 Verification channel: {channel.name}",
+        ephemeral=True
+    )
+
+
+@tree.command(name="set_role", description="Set verified role")
+async def set_role(interaction: discord.Interaction, role: discord.Role):
+    gid = interaction.guild.id
+
+    if gid not in guild_config:
+        guild_config[gid] = {}
+
+    guild_config[gid]["role"] = role.name
+
+    await interaction.response.send_message(
+        f"🟢 Verified role: {role.name}",
+        ephemeral=True
+    )
+
+
+# 🤖 BOT EVENTS
 @bot.event
 async def on_ready():
+    await tree.sync()
     print(f"✅ Bot online als {bot.user}")
+
 
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
 
-    if message.channel.name != VERIFICATION_CHANNEL:
+    guild = message.guild
+    if not guild:
+        return
+
+    gid = guild.id
+
+    if gid not in guild_config:
+        return
+
+    config = guild_config[gid]
+
+    if "channel" not in config:
+        return
+
+    if message.channel.name != config["channel"]:
         return
 
     if not message.attachments:
@@ -91,32 +158,37 @@ async def on_message(message):
     attachment = message.attachments[0]
 
     if "image" not in (attachment.content_type or ""):
-        await message.channel.send("❌ Alleen afbeeldingen toegestaan.")
         return
+
+    # ⛔ anti spam
+    if attachment.url in processed_images:
+        return
+    processed_images.add(attachment.url)
+
+    # ⛔ cooldown
+    if user_cooldown.get(message.author.id, 0) > time.time():
+        return
+
+    user_cooldown[message.author.id] = time.time() + 10
 
     await message.channel.send("🔍 Checking...")
 
-    # 🧠 AI call (non-blocking fix)
-    result = await asyncio.to_thread(analyze_image, attachment.url)
+    alliance_name = config.get("alliance", "UNKNOWN")
 
-    guild = message.guild
-    member = message.author
+    result = analyze_image(attachment.url, alliance_name)
 
-    verified_role = await get_role(guild, VERIFIED_ROLE)
+    role_name = config.get("role")
 
-    # 🟢 APPROVED
+    role = discord.utils.get(guild.roles, name=role_name)
+
     if "APPROVED" in result.upper():
-        if verified_role:
-            try:
-                await member.add_roles(verified_role)
-                await message.channel.send("🟢 Verified!")
-            except discord.Forbidden:
-                await message.channel.send("❌ Bot mist 'Manage Roles' permissies.")
-        else:
-            await message.channel.send("❌ Verified role niet gevonden.")
+        if role:
+            await message.author.add_roles(role)
+        await message.channel.send("🟢 Verified!")
     else:
         await message.channel.send("🔴 Not verified.")
 
+
 # 🚀 START EVERYTHING
-keep_alive()
+Thread(target=run_web).start()
 bot.run(DISCORD_TOKEN)
