@@ -127,6 +127,15 @@ async def set_role(interaction: discord.Interaction, role: discord.Role):
 @bot.event
 async def on_ready():
     await tree.sync()
+
+    # 🔥 STATUS (JOUW CARL-BOT STYLE)
+    activity = discord.Activity(
+        type=discord.ActivityType.playing,
+        name="Type /set to start | Memento Guard"
+    )
+
+    await bot.change_presence(activity=activity)
+
     print(f"✅ Bot online als {bot.user}")
 
 
