@@ -34,8 +34,11 @@ def run_web():
     app.run(host="0.0.0.0", port=port)
 
 
-# 🧠 CONFIG STORAGE (later database upgrade)
+# 🧠 CONFIG STORAGE
 guild_config = {}
+
+# 🧩 SETUP WIZARD STORAGE
+setup_sessions = {}
 
 # ⛔ anti spam / cache
 processed_images = set()
@@ -69,7 +72,6 @@ APPROVED or REJECTED
                 }
             ]
         )
-
         return response.output_text.strip()
 
     except Exception as e:
@@ -78,17 +80,44 @@ APPROVED or REJECTED
 
 
 # 🔧 SLASH COMMANDS
+@tree.command(name="setup", description="Start full bot setup wizard")
+async def setup(interaction: discord.Interaction):
+    gid = interaction.guild.id
+
+    setup_sessions[gid] = {
+        "step": 0,
+        "data": {},
+        "user": interaction.user.id
+    }
+
+    await interaction.response.send_message(
+        "⚙️ **Setup started!**\nWhat is your **Alliance name**?",
+        ephemeral=True
+    )
+
+
+@tree.command(name="set_guest_role", description="Set guest role for rejected users")
+async def set_guest_role(interaction: discord.Interaction, role: discord.Role):
+    gid = interaction.guild.id
+    guild_config.setdefault(gid, {})
+
+    guild_config[gid]["guest_role"] = role.name
+
+    await interaction.response.send_message(
+        f"🟡 Guest role set to: {role.name}",
+        ephemeral=True
+    )
+
+
 @tree.command(name="set_alliance", description="Set alliance name")
 async def set_alliance(interaction: discord.Interaction, name: str):
     gid = interaction.guild.id
-
-    if gid not in guild_config:
-        guild_config[gid] = {}
+    guild_config.setdefault(gid, {})
 
     guild_config[gid]["alliance"] = name
 
     await interaction.response.send_message(
-        f"✅ Alliance ingesteld op: {name}",
+        f"✅ Alliance set to: {name}",
         ephemeral=True
     )
 
@@ -96,9 +125,7 @@ async def set_alliance(interaction: discord.Interaction, name: str):
 @tree.command(name="set_channel", description="Set verification channel")
 async def set_channel(interaction: discord.Interaction, channel: discord.TextChannel):
     gid = interaction.guild.id
-
-    if gid not in guild_config:
-        guild_config[gid] = {}
+    guild_config.setdefault(gid, {})
 
     guild_config[gid]["channel"] = channel.name
 
@@ -111,9 +138,7 @@ async def set_channel(interaction: discord.Interaction, channel: discord.TextCha
 @tree.command(name="set_role", description="Set verified role")
 async def set_role(interaction: discord.Interaction, role: discord.Role):
     gid = interaction.guild.id
-
-    if gid not in guild_config:
-        guild_config[gid] = {}
+    guild_config.setdefault(gid, {})
 
     guild_config[gid]["role"] = role.name
 
@@ -123,22 +148,22 @@ async def set_role(interaction: discord.Interaction, role: discord.Role):
     )
 
 
-# 🤖 BOT EVENTS
+# 🤖 BOT READY
 @bot.event
 async def on_ready():
     await tree.sync()
 
-    # 🔥 STATUS (JOUW CARL-BOT STYLE)
     activity = discord.Activity(
         type=discord.ActivityType.playing,
-        name="Type /set to start | Memento Guard"
+        name="Use /setup to configure | Memento Guard"
     )
 
     await bot.change_presence(activity=activity)
 
-    print(f"✅ Bot online als {bot.user}")
+    print(f"✅ Bot online as {bot.user}")
 
 
+# 🤖 SETUP WIZARD FLOW
 @bot.event
 async def on_message(message):
     if message.author.bot:
@@ -150,6 +175,47 @@ async def on_message(message):
 
     gid = guild.id
 
+    # =========================
+    # ⚙️ SETUP FLOW
+    # =========================
+    if gid in setup_sessions:
+        session = setup_sessions[gid]
+
+        if message.author.id != session["user"]:
+            return
+
+        step = session["step"]
+
+        if step == 0:
+            session["data"]["alliance"] = message.content
+            session["step"] = 1
+            await message.channel.send("📸 Which **verification channel** should be used?")
+            return
+
+        if step == 1:
+            session["data"]["channel"] = message.content
+            session["step"] = 2
+            await message.channel.send("🟢 Which **verified role** should users get?")
+            return
+
+        if step == 2:
+            session["data"]["role"] = message.content
+            session["step"] = 3
+            await message.channel.send("🟡 Which **guest role** should rejected users get?")
+            return
+
+        if step == 3:
+            session["data"]["guest_role"] = message.content
+
+            guild_config[gid] = session["data"]
+            del setup_sessions[gid]
+
+            await message.channel.send("✅ **Setup complete! Bot is ready.**")
+            return
+
+    # =========================
+    # 🤖 IMAGE VERIFICATION
+    # =========================
     if gid not in guild_config:
         return
 
@@ -183,19 +249,38 @@ async def on_message(message):
     await message.channel.send("🔍 Checking...")
 
     alliance_name = config.get("alliance", "UNKNOWN")
-
     result = analyze_image(attachment.url, alliance_name)
 
-    role_name = config.get("role")
+    role = discord.utils.get(guild.roles, name=config.get("role"))
+    guest_role = discord.utils.get(guild.roles, name=config.get("guest_role", "Guest"))
 
-    role = discord.utils.get(guild.roles, name=role_name)
-
+    # 🟢 APPROVED
     if "APPROVED" in result.upper():
+
         if role:
             await message.author.add_roles(role)
-        await message.channel.send("🟢 Verified!")
+
+        if guest_role:
+            await message.author.remove_roles(guest_role)
+
+        await message.channel.send(
+            f"🔥 **APPROVED**\n"
+            f"{message.author.mention} Welcome Member — you have been verified successfully!"
+        )
+
+    # ⭐ REJECTED
     else:
-        await message.channel.send("🔴 Not verified.")
+
+        if guest_role:
+            await message.author.add_roles(guest_role)
+
+        if role:
+            await message.author.remove_roles(role)
+
+        await message.channel.send(
+            f"⭐ **REJECTED**\n"
+            f"{message.author.mention} You have been assigned the Guest role."
+        )
 
 
 # 🚀 START EVERYTHING
