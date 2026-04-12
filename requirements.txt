@@ -1,4 +1,7 @@
 discord.py
-python-dotenv
 openai
 flask
+python-dotenv
+requests
+Pillow
+pytesseract
