@@ -7,7 +7,6 @@ from openai import OpenAI
 from flask import Flask
 from threading import Thread
 from discord import app_commands
-from discord import Embed, Color
 import json
 
 load_dotenv()
@@ -62,20 +61,37 @@ processed = set()
 cooldown = {}
 
 # =========================
-# SAFE LOG
+# LOG SYSTEM (UPGRADED)
 # =========================
-async def send_log(guild, text):
+async def send_log(guild, status, user, user_id, roles=None, reason=None, action=None):
     cursor.execute("SELECT log_channel_id FROM guilds WHERE guild_id=?", (guild.id,))
     row = cursor.fetchone()
     if not row:
         return
 
     ch = guild.get_channel(row[0])
-    if ch:
-        await ch.send(text)
+    if not ch:
+        return
+
+    embed = discord.Embed(
+        title="🟢 APPROVED VERIFICATION" if status == "APPROVED" else "🔴 REJECTED VERIFICATION",
+        color=discord.Color.green() if status == "APPROVED" else discord.Color.red()
+    )
+
+    embed.add_field(name="User", value=f"{user} ({user_id})", inline=False)
+
+    if status == "APPROVED":
+        embed.add_field(name="Roles", value=", ".join(roles) if roles else "None", inline=False)
+        embed.add_field(name="Time", value=time.strftime("%Y-%m-%d %H:%M:%S"), inline=False)
+    else:
+        embed.add_field(name="Reason", value=reason or "Unknown", inline=False)
+        embed.add_field(name="Action", value=action or "Guest role assigned", inline=False)
+        embed.add_field(name="Time", value=time.strftime("%Y-%m-%d %H:%M:%S"), inline=False)
+
+    await ch.send(embed=embed)
 
 # =========================
-# AI SAFE PARSE
+# AI PARSE
 # =========================
 def analyze(url, guild_id):
     cursor.execute("SELECT alliance, tag FROM alliances WHERE guild_id=?", (guild_id,))
@@ -94,7 +110,7 @@ def analyze(url, guild_id):
                         "text": f"""
 Return STRICT JSON ONLY.
 
-Valid:
+Valid alliances:
 {data}
 
 Format:
@@ -111,12 +127,12 @@ Format:
         )
         return res.output_text.strip()
     except:
-        return '{"status":"REJECTED","matches":[],"reason":"AI error"}'
+        return '{"status":"REJECTED","matches":[],"reason":"verification failed"}'
 
 # =========================
 # SETUP COMMAND
 # =========================
-@tree.command(name="setup")
+@tree.command(name="setup", description="Alliance Sentinel setup")
 async def setup(interaction: discord.Interaction):
     setup_sessions[interaction.user.id] = {
         "step": 0,
@@ -128,13 +144,12 @@ async def setup(interaction: discord.Interaction):
     await interaction.response.send_message("⚙️ Setup started", ephemeral=True)
 
 # =========================
-# READY (STATUS ADDED)
+# READY (STATUS + PRESENCE)
 # =========================
 @bot.event
 async def on_ready():
     await tree.sync()
 
-    # 👇 Discord status (Carl-bot style)
     activity = discord.Activity(
         type=discord.ActivityType.playing,
         name="/setup • Alliance Sentinel"
@@ -148,7 +163,7 @@ async def on_ready():
     print("Online")
 
 # =========================
-# MESSAGE HANDLER
+# SETUP WIZARD (MULTI ALLIANCE)
 # =========================
 @bot.event
 async def on_message(message):
@@ -183,45 +198,49 @@ async def on_message(message):
             s["current"] = {}
 
             s["step"] = 3
-            await message.channel.send("➕ add another? (yes/no)")
+            await message.channel.send("➕ Add another alliance? (yes/no)")
             return
 
         if step == 3:
             if c.lower() == "yes":
                 s["step"] = 0
-                await message.channel.send("⚙️ new alliance name")
+                await message.channel.send("⚙️ NEW alliance name:")
             else:
-                text = "🧾 Setup:\n\n"
-                for i,a in enumerate(s["alliances"],1):
+                s["step"] = 4
+
+                text = "🧾 Alliances saved:\n\n"
+                for i, a in enumerate(s["alliances"], 1):
                     text += f"{i}. {a['alliance']} → {a['tag']} → <@&{a['role_id']}>\n"
 
-                text += "\n📸 verification channel?"
-                s["step"] = 4
+                text += "\n📸 Mention verification channel:"
                 await message.channel.send(text)
             return
 
         if step == 4:
             if not message.channel_mentions:
                 return
+
             s["config"]["channel_id"] = message.channel_mentions[0].id
             s["step"] = 5
-            await message.channel.send("👤 guest role?")
+            await message.channel.send("👤 Guest role?")
             return
 
         if step == 5:
             if not message.role_mentions:
                 return
+
             s["config"]["guest_role_id"] = message.role_mentions[0].id
             s["step"] = 6
-            await message.channel.send("🪵 log channel?")
+            await message.channel.send("🪵 Log channel?")
             return
 
         if step == 6:
             if not message.channel_mentions:
                 return
+
             s["config"]["log_channel_id"] = message.channel_mentions[0].id
             s["step"] = 7
-            await message.channel.send("Confirm? (yes/no)")
+            await message.channel.send("Confirm setup? (yes/no)")
             return
 
         if step == 7:
@@ -233,7 +252,10 @@ async def on_message(message):
             gid = message.guild.id
 
             cursor.execute("INSERT OR REPLACE INTO guilds VALUES (?,?,?,?)",
-                (gid, s["config"]["channel_id"], s["config"]["guest_role_id"], s["config"]["log_channel_id"])
+                (gid,
+                 s["config"]["channel_id"],
+                 s["config"]["guest_role_id"],
+                 s["config"]["log_channel_id"])
             )
 
             for a in s["alliances"]:
@@ -245,15 +267,18 @@ async def on_message(message):
             conn.commit()
             setup_sessions.pop(message.author.id)
 
-            await message.channel.send("✅ setup done")
+            await message.channel.send("✅ Setup complete!")
             return
 
-    cursor.execute("SELECT channel_id, guest_role_id, log_channel_id FROM guilds WHERE guild_id=?", (message.guild.id,))
+    # =========================
+    # VERIFY SYSTEM
+    # =========================
+    cursor.execute("SELECT channel_id, guest_role_id FROM guilds WHERE guild_id=?", (message.guild.id,))
     cfg = cursor.fetchone()
     if not cfg:
         return
 
-    channel_id, guest_role_id, log_channel_id = cfg
+    channel_id, guest_role_id = cfg
 
     if message.channel.id != channel_id:
         return
@@ -279,7 +304,7 @@ async def on_message(message):
     try:
         data = json.loads(raw)
     except:
-        data = {"status":"REJECTED","matches":[],"reason":"parse error"}
+        data = {"status": "REJECTED", "matches": [], "reason": "verification failed"}
 
     guest = message.guild.get_role(guest_role_id)
 
@@ -303,21 +328,34 @@ async def on_message(message):
             await message.author.add_roles(guest)
             roles.append("Guest")
 
-        await send_log(message.guild,
-            f"✅ APPROVED\nUser: {message.author} ({message.author.id})\nRoles: {', '.join(roles)}"
+        await send_log(
+            message.guild,
+            "APPROVED",
+            message.author,
+            message.author.id,
+            roles=roles
         )
+
+        await message.channel.send("✅ Verification approved!")
 
     else:
 
         if guest:
             await message.author.add_roles(guest)
 
-        await send_log(message.guild,
-            f"❌ REJECTED\nUser: {message.author} ({message.author.id})\nReason: {data.get('reason')}\nRole: Guest"
+        await send_log(
+            message.guild,
+            "REJECTED",
+            message.author,
+            message.author.id,
+            reason=data.get("reason"),
+            action="Guest role assigned"
         )
 
+        await message.channel.send("❌ Verification rejected")
+
 # =========================
-# WEB SERVER (FIX)
+# WEB SERVER
 # =========================
 app = Flask(__name__)
 
@@ -329,7 +367,7 @@ def run_web():
     app.run(host="0.0.0.0", port=8080)
 
 # =========================
-# RUN
+# START
 # =========================
 Thread(target=run_web).start()
 bot.run(DISCORD_TOKEN)
