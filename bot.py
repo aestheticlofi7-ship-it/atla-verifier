@@ -105,7 +105,7 @@ async def safe_delete(message):
         pass
 
 # =========================
-# 🔥 ONLY CHANGE: LOG SYSTEM
+# LOGS
 # =========================
 async def send_log(guild, status, user, user_id, role_name=None, reason=None):
     config = load_guild(guild.id)
@@ -118,7 +118,6 @@ async def send_log(guild, status, user, user_id, role_name=None, reason=None):
 
     now = time.strftime("%Y-%m-%d %H:%M:%S")
 
-    # 🟢 APPROVED
     if status == "APPROVED":
         embed = Embed(
             title="🟢 VERIFIED MEMBER",
@@ -129,9 +128,8 @@ async def send_log(guild, status, user, user_id, role_name=None, reason=None):
         embed.add_field(name="Role Given", value=role_name or "None", inline=False)
         embed.add_field(name="Status", value="Approved", inline=False)
         embed.add_field(name="Time", value=now, inline=False)
-        embed.set_footer(text="Memento Guard")
+        embed.set_footer(text="Alliance Sentinel")
 
-    # 🔴 REJECTED
     else:
         embed = Embed(
             title="🔴 REJECTED MEMBER",
@@ -142,15 +140,18 @@ async def send_log(guild, status, user, user_id, role_name=None, reason=None):
         embed.add_field(name="Reason", value=reason or "Invalid AI response", inline=False)
         embed.add_field(name="Action", value="Guest role assigned", inline=False)
         embed.add_field(name="Time", value=now, inline=False)
-        embed.set_footer(text="Memento Guard")
+        embed.set_footer(text="Alliance Sentinel")
 
     await channel.send(embed=embed)
 
 # =========================
-# AI CHECK
+# 🔥 ONLY CHANGED: AI FUNCTION
 # =========================
 def analyze_image(url, alliance, tag):
     try:
+        # clean url for better vision accuracy
+        url = url.split("?")[0]
+
         res = client_ai.responses.create(
             model="gpt-4o-mini",
             input=[{
@@ -159,26 +160,41 @@ def analyze_image(url, alliance, tag):
                     {
                         "type": "input_text",
                         "text": f"""
-Check screenshot.
+You are a HIGH-ACCURACY Discord verification AI.
 
-Alliance must match: {alliance}
-Tag must match: {tag}
+TASK:
+Carefully analyze the screenshot and detect if it matches the required data.
 
-Return ONLY:
+EXPECTED:
+- Alliance: {alliance}
+- Tag: {tag}
+
+RULES:
+- Focus ONLY on visible UI text
+- Read small/blurry text carefully
+- Ignore background noise or decorations
+- If ANY part matches → APPROVE
+- If unclear but likely matching → APPROVE
+- Only reject if NOTHING matches or image is unrelated
+
+OUTPUT FORMAT (STRICT):
 APPROVED
-or
-REJECTED: <reason>
+OR
+REJECTED: <short reason>
 """
                     },
                     {
                         "type": "input_image",
-                        "image_url": url
+                        "image_url": url,
+                        "detail": "high"
                     }
                 ]
             }]
         )
+
         return res.output_text.strip()
-    except:
+
+    except Exception:
         return "REJECTED: AI error"
 
 # =========================
@@ -266,9 +282,6 @@ async def on_message(message):
     role = message.guild.get_role(config.get("role_id"))
     guest = message.guild.get_role(config.get("guest_role_id"))
 
-    # =========================
-    # RESULT HANDLING (UNCHANGED)
-    # =========================
     if result.startswith("APPROVED"):
         if role:
             await message.author.add_roles(role)
@@ -287,11 +300,10 @@ async def on_message(message):
             inline=False
         )
 
-        embed.set_footer(text="Memento Guard")
+        embed.set_footer(text="Alliance Sentinel")
 
         await message.channel.send(embed=embed)
 
-        # 🔥 NEW LOG CALL
         await send_log(
             message.guild,
             "APPROVED",
@@ -327,11 +339,10 @@ async def on_message(message):
             inline=False
         )
 
-        embed.set_footer(text="Memento Guard")
+        embed.set_footer(text="Alliance Sentinel")
 
         await message.channel.send(embed=embed)
 
-        # 🔥 NEW LOG CALL
         await send_log(
             message.guild,
             "REJECTED",
