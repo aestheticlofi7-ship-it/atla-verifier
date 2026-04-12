@@ -94,6 +94,16 @@ user_cooldown = {}
 setup_sessions = {}
 
 # =========================
+# SAFE DELETE FIX
+# =========================
+async def safe_delete(message):
+    try:
+        if message.guild.me.guild_permissions.manage_messages:
+            await message.delete()
+    except:
+        pass
+
+# =========================
 # LOGS
 # =========================
 async def send_log(guild, text):
@@ -141,17 +151,7 @@ REJECTED: <reason>
         return "REJECTED: AI error"
 
 # =========================
-# SAFE MESSAGE DELETE
-# =========================
-async def safe_delete(message):
-    try:
-        if message.guild.me.guild_permissions.manage_messages:
-            await message.delete()
-    except:
-        pass
-
-# =========================
-# SETUP WIZARD INPUT HANDLER
+# SETUP WIZARD FIXED FLOW
 # =========================
 @bot.event
 async def on_message(message):
@@ -159,7 +159,7 @@ async def on_message(message):
         return
 
     # =========================
-    # SETUP FLOW
+    # SETUP FLOW (FIXED)
     # =========================
     session = setup_sessions.get(message.author.id)
 
@@ -168,25 +168,43 @@ async def on_message(message):
         data = session["data"]
         content = message.content.strip()
 
+        steps_text = [
+            "Alliance name",
+            "Tag",
+            "Verification channel",
+            "Verified role",
+            "Guest role",
+            "Log channel"
+        ]
+
         if step == 0:
             data["alliance"] = content
-            await message.channel.send(f"✅ Alliance saved: **{content}**")
+            await message.channel.send("🏷️ Step 2: Send TAG")
 
         elif step == 1:
             data["tag"] = content
-            await message.channel.send(f"✅ Tag saved: **{content}**")
+            await message.channel.send("📸 Step 3: Mention verification channel")
 
         elif step == 2 and message.channel_mentions:
             data["channel_id"] = message.channel_mentions[0].id
+            await message.channel.send("🟢 Step 4: Mention VERIFIED role")
 
         elif step == 3 and message.role_mentions:
             data["role_id"] = message.role_mentions[0].id
+            await message.channel.send("⭐ Step 5: Mention GUEST role")
 
         elif step == 4 and message.role_mentions:
             data["guest_role_id"] = message.role_mentions[0].id
+            await message.channel.send("📁 Step 6: Mention LOG channel")
 
         elif step == 5 and message.channel_mentions:
             data["log_channel_id"] = message.channel_mentions[0].id
+
+            save_guild(message.guild.id, data)
+            setup_sessions.pop(message.author.id, None)
+
+            await message.channel.send("✅ Setup completed successfully!")
+            return
 
         session["data"] = data
         session["step"] += 1
@@ -195,7 +213,7 @@ async def on_message(message):
         return
 
     # =========================
-    # IMAGE VERIFICATION
+    # IMAGE CHECK
     # =========================
     config = load_guild(message.guild.id)
     if not config:
@@ -284,4 +302,4 @@ async def on_ready():
 # START
 # =========================
 Thread(target=run_web).start()
-bot.run(DISCORD_TOKEN)
+bot.run(DISCORD_TOKEN) 
