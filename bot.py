@@ -61,7 +61,7 @@ processed = set()
 cooldown = {}
 
 # =========================
-# AI (VERY IMPORTANT FIX)
+# AI ANALYSIS
 # =========================
 def analyze(image_url, guild_id):
     cursor.execute("SELECT alliance, tag FROM alliances WHERE guild_id=?", (guild_id,))
@@ -84,10 +84,9 @@ VALID ALLIANCES:
 {alliance_list}
 
 RULES:
-- You MUST be LENIENT
-- If ANY text or logo looks like an alliance/tag → APPROVE
-- Only reject if image is totally empty or irrelevant
-- NEVER reject for unclear text
+- Be VERY LENIENT
+- If ANY alliance/tag is visible → APPROVE
+- Only reject if image is completely empty or irrelevant
 
 Return ONLY JSON:
 {{
@@ -115,7 +114,7 @@ Return ONLY JSON:
         })
 
 # =========================
-# LOG EMBEDS (UPGRADED)
+# LOG SYSTEM
 # =========================
 async def send_log(guild, status, user, user_id, roles=None, reason=None):
     cursor.execute("SELECT log_channel_id FROM guilds WHERE guild_id=?", (guild.id,))
@@ -167,15 +166,24 @@ async def setup(interaction: discord.Interaction):
     )
 
 # =========================
-# READY
+# READY (FIXED STATUS HERE)
 # =========================
 @bot.event
 async def on_ready():
     await tree.sync()
-    print("Bot online")
+
+    await bot.change_presence(
+        status=discord.Status.online,
+        activity=discord.Activity(
+            type=discord.ActivityType.playing,
+            name="/setup • Alliance Sentinel"
+        )
+    )
+
+    print("Bot is online")
 
 # =========================
-# SETUP FLOW (FIXED STATE MACHINE)
+# SETUP FLOW
 # =========================
 @bot.event
 async def on_message(message):
@@ -279,7 +287,6 @@ async def on_message(message):
     # -------------------------
     cursor.execute("SELECT channel_id, guest_role_id FROM guilds WHERE guild_id=?", (message.guild.id,))
     cfg = cursor.fetchone()
-
     if not cfg:
         return
 
@@ -334,7 +341,7 @@ async def on_message(message):
             await message.author.add_roles(guest)
             roles.append("Guest")
 
-        await send_log(message.guild, "APPROVED", message.author, message.author.id, roles)
+        await send_log(message.guild, "APPROVED", message.author, message.author.id, roles, None)
         await message.channel.send("✅ Approved!")
 
     else:
@@ -346,13 +353,14 @@ async def on_message(message):
             "REJECTED",
             message.author,
             message.author.id,
-            reason=data.get("reason")
+            [],
+            data.get("reason")
         )
 
         await message.channel.send("❌ Rejected → Guest assigned")
 
 # =========================
-# WEB SERVER (RAILWAY KEEP ALIVE)
+# WEB SERVER
 # =========================
 app = Flask(__name__)
 
