@@ -110,10 +110,7 @@ def analyze_image(url, guild_id):
         """, (guild_id,))
         alliances = cursor.fetchall()
 
-        alliance_list = "\n".join([
-            f"- {a[0]} | {a[1]}"
-            for a in alliances
-        ])
+        alliance_list = "\n".join([f"- {a[0]} | {a[1]}" for a in alliances])
 
         res = client_ai.responses.create(
             model="gpt-4o-mini",
@@ -125,7 +122,7 @@ def analyze_image(url, guild_id):
                         "text": f"""
 Check this screenshot.
 
-Here are valid alliances:
+Valid alliances:
 {alliance_list}
 
 Return ONLY JSON:
@@ -166,7 +163,7 @@ async def setup(interaction: discord.Interaction):
     }
 
     await interaction.response.send_message(
-        "⚙️ Setup started.\n\nStep 1: Type alliance name",
+        "⚙️ Setup started.\nStep 1: Type alliance name",
         ephemeral=True
     )
 
@@ -187,7 +184,7 @@ async def on_ready():
     print(f"Online as {bot.user}")
 
 # =========================
-# MESSAGE HANDLER
+# MESSAGE HANDLER (FIXED SETUP + MULTI AI)
 # =========================
 @bot.event
 async def on_message(message):
@@ -197,13 +194,13 @@ async def on_message(message):
     session = setup_sessions.get(message.author.id)
 
     # =========================
-    # SETUP WIZARD (FIXED)
+    # SETUP WIZARD (FULL FIXED FLOW)
     # =========================
     if session:
         content = message.content.strip()
         step = session["step"]
 
-        # CONFIRM STEP
+        # CONFIRM
         if session.get("confirming"):
             if content.lower() == "yes":
 
@@ -227,13 +224,13 @@ async def on_message(message):
 
             elif content.lower() == "no":
                 session["confirming"] = False
-                await message.channel.send("❌ Cancelled. Continue setup.")
+                await message.channel.send("❌ Setup cancelled.")
                 await safe_delete(message)
                 return
 
             return
 
-        # STEP 0 → FIXED
+        # STEP 0
         if step == 0:
             session["current"]["alliance"] = content
             session["step"] = 1
@@ -241,7 +238,7 @@ async def on_message(message):
             await safe_delete(message)
             return
 
-        # STEP 1 → FIXED (YOUR BUG WAS HERE)
+        # STEP 1 (FIXED TAG BUG)
         elif step == 1:
             session["current"]["tag"] = content
             session["step"] = 2
@@ -249,7 +246,7 @@ async def on_message(message):
             await safe_delete(message)
             return
 
-        # STEP 2 → ROLE PICK
+        # STEP 2 ROLE
         elif step == 2:
             if not message.role_mentions:
                 await message.channel.send("❌ Mention a valid role")
@@ -266,7 +263,7 @@ async def on_message(message):
             await safe_delete(message)
             return
 
-        # STEP 3 → LOOP / CONFIRM
+        # STEP 3 LOOP
         elif step == 3:
             if content.lower() == "yes":
                 session["step"] = 0
@@ -278,15 +275,15 @@ async def on_message(message):
                     overview += f"{i}. {a['alliance']} → {a['tag']} → <@&{a['role_id']}>\n"
 
                 overview += "\nConfirm? (yes/no)"
-
                 session["confirming"] = True
+
                 await message.channel.send(overview)
 
         await safe_delete(message)
         return
 
     # =========================
-    # IMAGE CHECK (MULTI AI)
+    # IMAGE CHECK (MULTI-ALLIANCE AI)
     # =========================
     cursor.execute("SELECT channel_id, guest_role_id FROM guilds WHERE guild_id = ?", (message.guild.id,))
     cfg = cursor.fetchone()
