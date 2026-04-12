@@ -187,7 +187,7 @@ async def on_ready():
     print(f"Online as {bot.user}")
 
 # =========================
-# MESSAGE HANDLER (SETUP + VERIFY)
+# MESSAGE HANDLER
 # =========================
 @bot.event
 async def on_message(message):
@@ -197,11 +197,13 @@ async def on_message(message):
     session = setup_sessions.get(message.author.id)
 
     # =========================
-    # SETUP WIZARD
+    # SETUP WIZARD (FIXED)
     # =========================
     if session:
         content = message.content.strip()
+        step = session["step"]
 
+        # CONFIRM STEP
         if session.get("confirming"):
             if content.lower() == "yes":
 
@@ -231,17 +233,29 @@ async def on_message(message):
 
             return
 
-        step = session["step"]
-
+        # STEP 0 → FIXED
         if step == 0:
             session["current"]["alliance"] = content
+            session["step"] = 1
             await message.channel.send("🏷️ Step 2: Send TAG")
+            await safe_delete(message)
+            return
 
+        # STEP 1 → FIXED (YOUR BUG WAS HERE)
         elif step == 1:
             session["current"]["tag"] = content
+            session["step"] = 2
             await message.channel.send("⭐ Step 3: Mention VERIFIED role")
+            await safe_delete(message)
+            return
 
-        elif step == 2 and message.role_mentions:
+        # STEP 2 → ROLE PICK
+        elif step == 2:
+            if not message.role_mentions:
+                await message.channel.send("❌ Mention a valid role")
+                await safe_delete(message)
+                return
+
             session["current"]["role_id"] = message.role_mentions[0].id
 
             session["alliances"].append(session["current"])
@@ -252,6 +266,7 @@ async def on_message(message):
             await safe_delete(message)
             return
 
+        # STEP 3 → LOOP / CONFIRM
         elif step == 3:
             if content.lower() == "yes":
                 session["step"] = 0
@@ -263,8 +278,8 @@ async def on_message(message):
                     overview += f"{i}. {a['alliance']} → {a['tag']} → <@&{a['role_id']}>\n"
 
                 overview += "\nConfirm? (yes/no)"
-                session["confirming"] = True
 
+                session["confirming"] = True
                 await message.channel.send(overview)
 
         await safe_delete(message)
