@@ -7,7 +7,6 @@ from openai import OpenAI
 from flask import Flask
 from threading import Thread
 from discord import app_commands
-from discord.ui import View, Button
 
 load_dotenv()
 
@@ -92,8 +91,6 @@ def load_guild(gid):
 # =========================
 processed_images = set()
 user_cooldown = {}
-
-# 🔥 SETUP SESSIONS (FIXED)
 setup_sessions = {}
 
 # =========================
@@ -144,7 +141,17 @@ REJECTED: <reason>
         return "REJECTED: AI error"
 
 # =========================
-# 🧠 SETUP WIZARD (FIXED + WORKING INPUT)
+# SAFE MESSAGE DELETE
+# =========================
+async def safe_delete(message):
+    try:
+        if message.guild.me.guild_permissions.manage_messages:
+            await message.delete()
+    except:
+        pass
+
+# =========================
+# SETUP WIZARD INPUT HANDLER
 # =========================
 @bot.event
 async def on_message(message):
@@ -152,7 +159,7 @@ async def on_message(message):
         return
 
     # =========================
-    # 🧩 SETUP FLOW FIX
+    # SETUP FLOW
     # =========================
     session = setup_sessions.get(message.author.id)
 
@@ -163,9 +170,11 @@ async def on_message(message):
 
         if step == 0:
             data["alliance"] = content
+            await message.channel.send(f"✅ Alliance saved: **{content}**")
 
         elif step == 1:
             data["tag"] = content
+            await message.channel.send(f"✅ Tag saved: **{content}**")
 
         elif step == 2 and message.channel_mentions:
             data["channel_id"] = message.channel_mentions[0].id
@@ -182,7 +191,7 @@ async def on_message(message):
         session["data"] = data
         session["step"] += 1
 
-        await message.delete()
+        await safe_delete(message)
         return
 
     # =========================
@@ -251,7 +260,7 @@ async def setup(interaction: discord.Interaction):
     }
 
     await interaction.response.send_message(
-        "⚙️ Setup started.\n\nStep 1: Send Alliance name",
+        "⚙️ Setup started.\nStep 1: Type your Alliance name",
         ephemeral=True
     )
 
@@ -261,16 +270,18 @@ async def setup(interaction: discord.Interaction):
 @bot.event
 async def on_ready():
     await tree.sync()
+
     await bot.change_presence(
         activity=discord.Activity(
             type=discord.ActivityType.playing,
             name="/setup • Memento Guard"
         )
     )
+
     print(f"Online as {bot.user}")
 
 # =========================
 # START
 # =========================
 Thread(target=run_web).start()
-bot.run(DISCORD_TOKEN) 
+bot.run(DISCORD_TOKEN)
