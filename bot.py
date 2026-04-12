@@ -95,162 +95,54 @@ user_cooldown = {}
 setup_sessions = {}
 
 # =========================
-# LOGGING
-# =========================
-async def send_log(guild, text):
-    config = load_guild(guild.id)
-    if not config:
-        return
-
-    channel = guild.get_channel(config.get("log_channel_id"))
-    if channel:
-        await channel.send(text)
-
-# =========================
-# AI CHECK
-# =========================
-def analyze_image(url, alliance, tag):
-    try:
-        res = client_ai.responses.create(
-            model="gpt-4o-mini",
-            input=[{
-                "role": "user",
-                "content": [
-                    {
-                        "type": "input_text",
-                        "text": f"""
-Check screenshot.
-
-Alliance must match: {alliance}
-Tag must match: {tag}
-
-Return ONLY:
-APPROVED
-or
-REJECTED: <reason>
-"""
-                    },
-                    {
-                        "type": "input_image",
-                        "image_url": url
-                    }
-                ]
-            }]
-        )
-        return res.output_text.strip()
-    except:
-        return "REJECTED: AI error"
-
-# =========================
-# SETUP WIZARD
-# =========================
-class SetupView(View):
-    def __init__(self, user_id):
-        super().__init__(timeout=120)
-        self.user_id = user_id
-
-    def session(self):
-        return setup_sessions.get(self.user_id)
-
-    async def refresh(self, interaction):
-        s = self.session()
-        if not s:
-            return
-
-        steps = [
-            "Alliance name",
-            "Tag",
-            "Verification channel",
-            "Verified role",
-            "Guest role",
-            "Log channel"
-        ]
-
-        await interaction.response.edit_message(
-            content=f"⚙️ Setup Wizard\n\nStep {s['step']+1}/6\n➡️ {steps[s['step']]}",
-            view=self
-        )
-
-    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary)
-    async def back(self, interaction: discord.Interaction, button: Button):
-        s = self.session()
-        if s and s["step"] > 0:
-            s["step"] -= 1
-        await self.refresh(interaction)
-
-    @discord.ui.button(label="Next", style=discord.ButtonStyle.primary)
-    async def next(self, interaction: discord.Interaction, button: Button):
-        s = self.session()
-        if not s:
-            return
-
-        s["step"] += 1
-
-        if s["step"] >= 6:
-            data = s["data"]
-
-            embed = discord.Embed(
-                title="🧾 Confirm Setup",
-                description=f"""
-Alliance: {data.get('alliance')}
-Tag: {data.get('tag')}
-Channel: <#{data.get('channel_id')}>
-Role: <@&{data.get('role_id')}>
-Guest: <@&{data.get('guest_role_id')}>
-Logs: <#{data.get('log_channel_id')}>
-""",
-                color=discord.Color.green()
-            )
-
-            await interaction.response.edit_message(embed=embed, view=None)
-            return
-
-        await self.refresh(interaction)
-
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger)
-    async def cancel(self, interaction: discord.Interaction, button: Button):
-        setup_sessions.pop(self.user_id, None)
-        await interaction.response.edit_message(content="❌ Cancelled", view=None)
-
-# =========================
-# SETUP START
-# =========================
-@tree.command(name="setup")
-async def setup(interaction: discord.Interaction):
-    setup_sessions[interaction.user.id] = {
-        "step": 0,
-        "data": {},
-        "start": time.time()
-    }
-
-    await interaction.response.send_message(
-        "⚙️ Setup Wizard Started",
-        view=SetupView(interaction.user.id),
-        ephemeral=True
-    )
-
-# =========================
-# READY
-# =========================
-@bot.event
-async def on_ready():
-    await tree.sync()
-    await bot.change_presence(
-        activity=discord.Activity(
-            type=discord.ActivityType.playing,
-            name="/setup • Memento Guard"
-        )
-    )
-    print(f"Online as {bot.user}")
-
-# =========================
-# IMAGE CHECK
+# 🧠 FIX: SETUP INPUT HANDLER (NIEUW)
 # =========================
 @bot.event
 async def on_message(message):
     if message.author.bot or not message.guild:
         return
 
+    # =========================
+    # 🧩 SETUP INPUT FLOW
+    # =========================
+    session = setup_sessions.get(message.author.id)
+
+    if session:
+        step = session["step"]
+        data = session["data"]
+
+        content = message.content.strip()
+
+        # STEP MAP
+        if step == 0:
+            data["alliance"] = content
+
+        elif step == 1:
+            data["tag"] = content
+
+        elif step == 2 and message.channel_mentions:
+            data["channel_id"] = message.channel_mentions[0].id
+
+        elif step == 3 and message.role_mentions:
+            data["role_id"] = message.role_mentions[0].id
+
+        elif step == 4 and message.role_mentions:
+            data["guest_role_id"] = message.role_mentions[0].id
+
+        elif step == 5 and message.channel_mentions:
+            data["log_channel_id"] = message.channel_mentions[0].id
+
+        session["data"] = data
+
+        # auto move next step
+        session["step"] += 1
+
+        await message.delete()
+        return
+
+    # =========================
+    # IMAGE CHECK (JOUW BESTAANDE LOGIC)
+    # =========================
     config = load_guild(message.guild.id)
     if not config:
         return
@@ -301,9 +193,3 @@ async def on_message(message):
 
     await message.channel.send(msg)
     await send_log(message.guild, msg)
-
-# =========================
-# START
-# =========================
-Thread(target=run_web).start()
-bot.run(DISCORD_TOKEN)
