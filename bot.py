@@ -11,16 +11,13 @@ from discord.ui import View, Button
 
 load_dotenv()
 
-# =========================
-# 🔑 ENV
-# =========================
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 client_ai = OpenAI(api_key=OPENAI_API_KEY)
 
 # =========================
-# ⚙️ DISCORD
+# DISCORD
 # =========================
 intents = discord.Intents.default()
 intents.message_content = True
@@ -30,7 +27,7 @@ bot = discord.Client(intents=intents)
 tree = app_commands.CommandTree(bot)
 
 # =========================
-# 🌐 FLASK
+# FLASK
 # =========================
 app = Flask(__name__)
 
@@ -43,7 +40,7 @@ def run_web():
     app.run(host="0.0.0.0", port=port)
 
 # =========================
-# 🗄️ DB
+# DATABASE
 # =========================
 conn = sqlite3.connect("bot.db", check_same_thread=False)
 cursor = conn.cursor()
@@ -93,7 +90,7 @@ def load_guild(gid):
     }
 
 # =========================
-# 🧠 SYSTEM
+# SYSTEM
 # =========================
 processed_images = set()
 user_cooldown = {}
@@ -107,7 +104,7 @@ def is_timeout(session):
     return time.time() - session["start"] > 120
 
 # =========================
-# 🤖 AI CHECK
+# AI
 # =========================
 def analyze_image(url, alliance_name, tag):
     try:
@@ -141,7 +138,7 @@ REJECTED: reason
         return "REJECTED: AI error"
 
 # =========================
-# 📁 LOGS
+# LOGS
 # =========================
 async def send_log(guild, text):
     config = load_guild(guild.id)
@@ -153,7 +150,7 @@ async def send_log(guild, text):
         await channel.send(text)
 
 # =========================
-# 🧩 SETUP WIZARD UI
+# SETUP WIZARD UI
 # =========================
 class SetupView(View):
     def __init__(self, user_id):
@@ -180,7 +177,7 @@ class SetupView(View):
         step = session["step"]
 
         content = f"""
-⚙️ Setup Wizard
+⚙️ **Setup Wizard**
 
 Step {step+1}/6
 ➡️ {steps[step]}
@@ -209,18 +206,26 @@ Step {step+1}/6
 
         session["step"] += 1
 
+        # FINAL STEP → RECAP
         if session["step"] >= 6:
             data = session["data"]
 
-            recap = f"""
-🧾 Confirm Setup:
+            embed = discord.Embed(
+                title="🧾 Setup Confirm",
+                description=f"""
+🏰 Alliance: {data.get("alliance")}
+🏷️ Tag: {data.get("tag")}
+📸 Channel: <#{data.get("channel_id")}>
+🟢 Role: <@&{data.get("role_id")}>
+⭐ Guest: <@&{data.get("guest_role_id")}>
+📁 Logs: <#{data.get("log_channel_id")}>
 
-Alliance: {data.get("alliance")}
-Tag: {data.get("tag")}
+Type **YES** to confirm or **NO** to cancel
+""",
+                color=discord.Color.green()
+            )
 
-Type YES to confirm or NO to cancel
-"""
-            await interaction.response.edit_message(content=recap, view=None)
+            await interaction.response.edit_message(embed=embed, view=None)
             return
 
         await self.update(interaction)
@@ -231,7 +236,7 @@ Type YES to confirm or NO to cancel
         await interaction.response.edit_message(content="❌ Setup cancelled", view=None)
 
 # =========================
-# 🚀 SETUP START
+# START SETUP
 # =========================
 @tree.command(name="setup")
 async def setup(interaction: discord.Interaction):
@@ -251,7 +256,7 @@ async def setup(interaction: discord.Interaction):
     )
 
 # =========================
-# 🤖 READY
+# READY
 # =========================
 @bot.event
 async def on_ready():
@@ -259,7 +264,7 @@ async def on_ready():
     print(f"Bot online as {bot.user}")
 
 # =========================
-# 🤖 IMAGE CHECK
+# IMAGE CHECK
 # =========================
 @bot.event
 async def on_message(message):
@@ -320,7 +325,7 @@ async def on_message(message):
         await send_log(message.guild, msg)
 
 # =========================
-# 🚀 START
+# START
 # =========================
 Thread(target=run_web).start()
 bot.run(DISCORD_TOKEN)
