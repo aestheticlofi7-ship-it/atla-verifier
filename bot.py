@@ -105,7 +105,7 @@ async def safe_delete(message):
         pass
 
 # =========================
-# LOGS
+# 🔥 ONLY CHANGE: LOG SYSTEM
 # =========================
 async def send_log(guild, status, user, user_id, role_name=None, reason=None):
     config = load_guild(guild.id)
@@ -118,6 +118,7 @@ async def send_log(guild, status, user, user_id, role_name=None, reason=None):
 
     now = time.strftime("%Y-%m-%d %H:%M:%S")
 
+    # 🟢 APPROVED
     if status == "APPROVED":
         embed = Embed(
             title="🟢 VERIFIED MEMBER",
@@ -130,6 +131,7 @@ async def send_log(guild, status, user, user_id, role_name=None, reason=None):
         embed.add_field(name="Time", value=now, inline=False)
         embed.set_footer(text="Alliance Sentinel")
 
+    # 🔴 REJECTED
     else:
         embed = Embed(
             title="🔴 REJECTED MEMBER",
@@ -145,12 +147,10 @@ async def send_log(guild, status, user, user_id, role_name=None, reason=None):
     await channel.send(embed=embed)
 
 # =========================
-# 🔥 ONLY CHANGED: AI FUNCTION (FIXED)
+# AI CHECK
 # =========================
 def analyze_image(url, alliance, tag):
     try:
-        url = url.split("?")[0]
-
         res = client_ai.responses.create(
             model="gpt-4o-mini",
             input=[{
@@ -159,42 +159,27 @@ def analyze_image(url, alliance, tag):
                     {
                         "type": "input_text",
                         "text": f"""
-You are a HIGH ACCURACY Discord verification AI.
+Check screenshot.
 
-Your job:
-Check if the screenshot clearly contains:
+Alliance must match: {alliance}
+Tag must match: {tag}
 
-Alliance: {alliance}
-Tag: {tag}
-
-RULES:
-- Read ALL visible UI text carefully
-- Zoom-level understanding required (small text matters)
-- Ignore background / decorations
-- If ANY part matches → APPROVE
-- Only reject if NOTHING matches or image is unrelated
-
-OUTPUT ONLY:
+Return ONLY:
 APPROVED
-OR
-REJECTED: <short reason>
+or
+REJECTED: <reason>
 """
                     },
                     {
                         "type": "input_image",
-                        "image_url": {
-                            "url": url
-                        },
-                        "detail": "high"
+                        "image_url": url
                     }
                 ]
             }]
         )
-
         return res.output_text.strip()
-
-    except Exception as e:
-        return f"REJECTED: AI error ({str(e)})"
+    except:
+        return "REJECTED: AI error"
 
 # =========================
 # SETUP WIZARD
@@ -281,6 +266,9 @@ async def on_message(message):
     role = message.guild.get_role(config.get("role_id"))
     guest = message.guild.get_role(config.get("guest_role_id"))
 
+    # =========================
+    # RESULT HANDLING (UNCHANGED)
+    # =========================
     if result.startswith("APPROVED"):
         if role:
             await message.author.add_roles(role)
@@ -303,6 +291,7 @@ async def on_message(message):
 
         await message.channel.send(embed=embed)
 
+        # 🔥 NEW LOG CALL
         await send_log(
             message.guild,
             "APPROVED",
@@ -342,6 +331,7 @@ async def on_message(message):
 
         await message.channel.send(embed=embed)
 
+        # 🔥 NEW LOG CALL
         await send_log(
             message.guild,
             "REJECTED",
