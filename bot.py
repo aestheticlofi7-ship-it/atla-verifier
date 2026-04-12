@@ -83,7 +83,7 @@ async def send_log(guild, status, user, user_id, roles=None, reason=None, action
     if status == "APPROVED":
         embed.add_field(name="Roles", value=", ".join(roles) if roles else "None", inline=False)
     else:
-        embed.add_field(name="Reason", value=reason or "No valid alliance/tag detected", inline=False)
+        embed.add_field(name="Reason", value=reason or "Could not detect valid alliance/tag", inline=False)
         embed.add_field(name="Action", value=action or "Guest role assigned", inline=False)
 
     embed.add_field(name="Time", value=time.strftime("%Y-%m-%d %H:%M:%S"), inline=False)
@@ -91,7 +91,7 @@ async def send_log(guild, status, user, user_id, roles=None, reason=None, action
     await ch.send(embed=embed)
 
 # =========================
-# AI ANALYSIS (FIXED IMAGE READING)
+# AI ANALYSIS (FIXED IMAGE RELIABILITY)
 # =========================
 def analyze(url, guild_id):
     cursor.execute("SELECT alliance, tag FROM alliances WHERE guild_id=?", (guild_id,))
@@ -113,18 +113,19 @@ You are a Discord verification AI.
 VALID ALLIANCES:
 {data}
 
-RULES:
-- Look carefully at the screenshot
-- If you see ANY matching alliance name or tag → APPROVE
-- Only reject if NOTHING readable exists
-- If unclear → still try to match
+IMPORTANT RULES:
+- Read image carefully
+- Try OCR-like reading
+- Even partial matches count
+- If unsure → try to interpret instead of rejecting
+- Only reject if image is completely unreadable
 
 Return ONLY JSON:
 
 {{
  "status":"APPROVED or REJECTED",
  "matches":[{{"alliance":"name"}}],
- "reason":"short explanation"
+ "reason":"short reason"
 }}
 """
                     },
@@ -137,8 +138,8 @@ Return ONLY JSON:
         )
         return res.output_text.strip()
 
-    except Exception as e:
-        return '{"status":"REJECTED","matches":[],"reason":"AI failed to read image"}'
+    except Exception:
+        return '{"status":"REJECTED","matches":[],"reason":"AI image parsing failed"}'
 
 # =========================
 # SETUP COMMAND
@@ -164,14 +165,11 @@ async def setup(interaction: discord.Interaction):
 async def on_ready():
     await tree.sync()
 
-    activity = discord.Activity(
-        type=discord.ActivityType.playing,
-        name="/setup • Alliance Sentinel"
-    )
-
     await bot.change_presence(
-        status=discord.Status.online,
-        activity=activity
+        activity=discord.Activity(
+            type=discord.ActivityType.playing,
+            name="/setup • Alliance Sentinel"
+        )
     )
 
     print("Online")
@@ -184,9 +182,6 @@ async def on_message(message):
     if message.author.bot or message.guild is None:
         return
 
-    # =========================
-    # SETUP FLOW
-    # =========================
     if message.author.id in setup_sessions:
         s = setup_sessions[message.author.id]
         c = message.content.strip()
@@ -283,11 +278,10 @@ async def on_message(message):
             return
 
     # =========================
-    # VERIFY SYSTEM (FIXED FINAL)
+    # VERIFY SYSTEM (FINAL FIX)
     # =========================
     cursor.execute("SELECT channel_id, guest_role_id FROM guilds WHERE guild_id=?", (message.guild.id,))
     cfg = cursor.fetchone()
-
     if not cfg:
         return
 
@@ -312,8 +306,10 @@ async def on_message(message):
 
     await message.channel.send("🔍 Checking...")
 
-    # 🔥 FIX: use proxy_url for better image reading
-    raw = analyze(att.proxy_url, message.guild.id)
+    # 🔥 FIX: try BOTH url + proxy_url
+    image_url = att.proxy_url or att.url
+
+    raw = analyze(image_url, message.guild.id)
 
     try:
         data = json.loads(raw)
@@ -327,9 +323,9 @@ async def on_message(message):
     guest = message.guild.get_role(guest_role_id)
     roles = []
 
-    if data.get("status") == "APPROVED":
+    if data.get("status") == "APPROVED" and data.get("matches"):
 
-        for m in data.get("matches", []):
+        for m in data["matches"]:
             cursor.execute("""
             SELECT role_id FROM alliances WHERE guild_id=? AND alliance=?
             """, (message.guild.id, m.get("alliance")))
@@ -349,7 +345,6 @@ async def on_message(message):
         await message.channel.send("✅ Verification approved!")
 
     else:
-
         if guest:
             await message.author.add_roles(guest)
 
