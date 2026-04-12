@@ -7,6 +7,7 @@ from openai import OpenAI
 from flask import Flask
 from threading import Thread
 from discord import app_commands
+from discord import Embed, Color
 
 load_dotenv()
 
@@ -151,31 +152,19 @@ REJECTED: <reason>
         return "REJECTED: AI error"
 
 # =========================
-# SETUP WIZARD FIXED FLOW
+# SETUP WIZARD
 # =========================
 @bot.event
 async def on_message(message):
     if message.author.bot or not message.guild:
         return
 
-    # =========================
-    # SETUP FLOW (FIXED)
-    # =========================
     session = setup_sessions.get(message.author.id)
 
     if session:
         step = session["step"]
         data = session["data"]
         content = message.content.strip()
-
-        steps_text = [
-            "Alliance name",
-            "Tag",
-            "Verification channel",
-            "Verified role",
-            "Guest role",
-            "Log channel"
-        ]
 
         if step == 0:
             data["alliance"] = content
@@ -247,13 +236,38 @@ async def on_message(message):
     role = message.guild.get_role(config.get("role_id"))
     guest = message.guild.get_role(config.get("guest_role_id"))
 
+    # =========================
+    # RESULT HANDLING (UPDATED)
+    # =========================
     if result.startswith("APPROVED"):
         if role:
             await message.author.add_roles(role)
         if guest:
             await message.author.remove_roles(guest)
 
-        msg = f"🔥 {message.author.mention} APPROVED"
+        embed = Embed(
+            title="✅ Verification Approved",
+            description=f"{message.author.mention} has been approved!",
+            color=Color.green()
+        )
+
+        embed.add_field(
+            name="Role Given",
+            value=role.name if role else "None",
+            inline=False
+        )
+
+        embed.set_footer(text="Memento Guard")
+
+        await message.channel.send(embed=embed)
+
+        log_text = (
+            f"✅ APPROVED\n"
+            f"User: {message.author} ({message.author.id})\n"
+            f"Role given: {role.name if role else 'None'}"
+        )
+        await send_log(message.guild, log_text)
+
     else:
         if guest:
             await message.author.add_roles(guest)
@@ -261,10 +275,37 @@ async def on_message(message):
             await message.author.remove_roles(role)
 
         reason = result.replace("REJECTED:", "").strip()
-        msg = f"⭐ {message.author.mention} REJECTED — {reason}"
+        guest_name = guest.name if guest else "Guest role"
 
-    await message.channel.send(msg)
-    await send_log(message.guild, msg)
+        embed = Embed(
+            title="❌ Verification Rejected",
+            description=f"{message.author.mention} has been rejected.",
+            color=Color.red()
+        )
+
+        embed.add_field(
+            name="Reason",
+            value=reason if reason else "No reason provided",
+            inline=False
+        )
+
+        embed.add_field(
+            name="Role Given",
+            value=guest_name,
+            inline=False
+        )
+
+        embed.set_footer(text="Memento Guard")
+
+        await message.channel.send(embed=embed)
+
+        log_text = (
+            f"❌ REJECTED\n"
+            f"User: {message.author} ({message.author.id})\n"
+            f"Reason: {reason}\n"
+            f"Role given: {guest_name}"
+        )
+        await send_log(message.guild, log_text)
 
 # =========================
 # SETUP COMMAND
@@ -302,4 +343,4 @@ async def on_ready():
 # START
 # =========================
 Thread(target=run_web).start()
-bot.run(DISCORD_TOKEN) 
+bot.run(DISCORD_TOKEN)
