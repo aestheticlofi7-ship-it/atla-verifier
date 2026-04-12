@@ -145,11 +145,10 @@ async def send_log(guild, status, user, user_id, role_name=None, reason=None):
     await channel.send(embed=embed)
 
 # =========================
-# 🔥 ONLY CHANGED: AI FUNCTION
+# 🔥 ONLY CHANGED: AI FUNCTION (FIXED)
 # =========================
 def analyze_image(url, alliance, tag):
     try:
-        # clean url for better vision accuracy
         url = url.split("?")[0]
 
         res = client_ai.responses.create(
@@ -160,24 +159,22 @@ def analyze_image(url, alliance, tag):
                     {
                         "type": "input_text",
                         "text": f"""
-You are a HIGH-ACCURACY Discord verification AI.
+You are a HIGH ACCURACY Discord verification AI.
 
-TASK:
-Carefully analyze the screenshot and detect if it matches the required data.
+Your job:
+Check if the screenshot clearly contains:
 
-EXPECTED:
-- Alliance: {alliance}
-- Tag: {tag}
+Alliance: {alliance}
+Tag: {tag}
 
 RULES:
-- Focus ONLY on visible UI text
-- Read small/blurry text carefully
-- Ignore background noise or decorations
+- Read ALL visible UI text carefully
+- Zoom-level understanding required (small text matters)
+- Ignore background / decorations
 - If ANY part matches → APPROVE
-- If unclear but likely matching → APPROVE
 - Only reject if NOTHING matches or image is unrelated
 
-OUTPUT FORMAT (STRICT):
+OUTPUT ONLY:
 APPROVED
 OR
 REJECTED: <short reason>
@@ -185,7 +182,9 @@ REJECTED: <short reason>
                     },
                     {
                         "type": "input_image",
-                        "image_url": url,
+                        "image_url": {
+                            "url": url
+                        },
                         "detail": "high"
                     }
                 ]
@@ -194,8 +193,8 @@ REJECTED: <short reason>
 
         return res.output_text.strip()
 
-    except Exception:
-        return "REJECTED: AI error"
+    except Exception as e:
+        return f"REJECTED: AI error ({str(e)})"
 
 # =========================
 # SETUP WIZARD
