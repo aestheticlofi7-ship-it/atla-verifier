@@ -104,7 +104,7 @@ def is_timeout(session):
     return time.time() - session["start"] > 120
 
 # =========================
-# AI
+# AI CHECK
 # =========================
 def analyze_image(url, alliance_name, tag):
     try:
@@ -188,12 +188,8 @@ Step {step+1}/6
     @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary)
     async def back(self, interaction: discord.Interaction, button: Button):
         session = self.get_session()
-        if not session:
-            return
-
-        if session["step"] > 0:
+        if session and session["step"] > 0:
             session["step"] -= 1
-
         await self.update(interaction)
 
     @discord.ui.button(label="Next", style=discord.ButtonStyle.primary)
@@ -203,10 +199,8 @@ Step {step+1}/6
             return
 
         autosave(session, interaction.guild.id)
-
         session["step"] += 1
 
-        # FINAL STEP → RECAP
         if session["step"] >= 6:
             data = session["data"]
 
@@ -220,7 +214,7 @@ Step {step+1}/6
 ⭐ Guest: <@&{data.get("guest_role_id")}>
 📁 Logs: <#{data.get("log_channel_id")}>
 
-Type **YES** to confirm or **NO** to cancel
+Type YES to confirm or NO to cancel
 """,
                 color=discord.Color.green()
             )
@@ -236,7 +230,7 @@ Type **YES** to confirm or **NO** to cancel
         await interaction.response.edit_message(content="❌ Setup cancelled", view=None)
 
 # =========================
-# START SETUP
+# SETUP START
 # =========================
 @tree.command(name="setup")
 async def setup(interaction: discord.Interaction):
@@ -256,11 +250,19 @@ async def setup(interaction: discord.Interaction):
     )
 
 # =========================
-# READY
+# READY (PRESENCE ADDED HERE ✅)
 # =========================
 @bot.event
 async def on_ready():
     await tree.sync()
+
+    await bot.change_presence(
+        activity=discord.Activity(
+            type=discord.ActivityType.playing,
+            name="/setup • Memento Guard"
+        )
+    )
+
     print(f"Bot online as {bot.user}")
 
 # =========================
