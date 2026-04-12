@@ -61,7 +61,7 @@ processed = set()
 cooldown = {}
 
 # =========================
-# LOG SYSTEM (FIXED + UPGRADED)
+# LOG SYSTEM
 # =========================
 async def send_log(guild, status, user, user_id, roles=None, reason=None, action=None):
     cursor.execute("SELECT log_channel_id FROM guilds WHERE guild_id=?", (guild.id,))
@@ -91,7 +91,7 @@ async def send_log(guild, status, user, user_id, roles=None, reason=None, action
     await ch.send(embed=embed)
 
 # =========================
-# AI PARSE (SAFE)
+# AI PARSE
 # =========================
 def analyze(url, guild_id):
     cursor.execute("SELECT alliance, tag FROM alliances WHERE guild_id=?", (guild_id,))
@@ -166,129 +166,123 @@ async def on_ready():
     print("Online")
 
 # =========================
-# SETUP WIZARD
+# SETUP WIZARD (FIXED + OVERVIEW FIX)
 # =========================
 @bot.event
 async def on_message(message):
-    if message.author.bot:
+    if message.author.bot or message.guild is None:
         return
 
-    if message.guild is None:
-        return
+    # =========================
+    # SETUP FLOW
+    # =========================
+    if message.author.id in setup_sessions:
+        s = setup_sessions[message.author.id]
+        c = message.content.strip()
+        step = s["step"]
 
-    if message.author.id not in setup_sessions:
-        return
-
-    s = setup_sessions[message.author.id]
-    c = message.content.strip()
-    step = s["step"]
-
-    # STEP 0 - NAME
-    if step == 0:
-        s["current"]["alliance"] = c
-        s["step"] = 1
-        await message.channel.send("🏷️ TAG?")
-        return
-
-    # STEP 1 - TAG
-    if step == 1:
-        s["current"]["tag"] = c
-        s["step"] = 2
-        await message.channel.send("⭐ VERIFIED ROLE?")
-        return
-
-    # STEP 2 - ROLE
-    if step == 2:
-        if not message.role_mentions:
-            await message.channel.send("❌ mention role")
+        if step == 0:
+            s["current"]["alliance"] = c
+            s["step"] = 1
+            await message.channel.send("🏷️ TAG?")
             return
 
-        s["current"]["role_id"] = message.role_mentions[0].id
-        s["alliances"].append(s["current"])
-        s["current"] = {}
-        s["step"] = 3
-        await message.channel.send("➕ Add another alliance? (yes/no)")
-        return
-
-    # STEP 3 - LOOP
-    if step == 3:
-        if c.lower() == "yes":
-            s["step"] = 0
-            await message.channel.send("⚙️ NEW alliance name:")
+        if step == 1:
+            s["current"]["tag"] = c
+            s["step"] = 2
+            await message.channel.send("⭐ VERIFIED ROLE?")
             return
 
-        s["step"] = 4
-        text = "🧾 Alliances saved:\n\n"
-        for i, a in enumerate(s["alliances"], 1):
-            text += f"{i}. {a['alliance']} → {a['tag']} → <@&{a['role_id']}>\n"
+        if step == 2:
+            if not message.role_mentions:
+                await message.channel.send("❌ mention role")
+                return
 
-        text += "\n📸 Mention verification channel:"
-        await message.channel.send(text)
-        return
-
-    # STEP 4 - CHANNEL
-    if step == 4:
-        if not message.channel_mentions:
+            s["current"]["role_id"] = message.role_mentions[0].id
+            s["alliances"].append(s["current"])
+            s["current"] = {}
+            s["step"] = 3
+            await message.channel.send("➕ Add another alliance? (yes/no)")
             return
 
-        s["config"]["channel_id"] = message.channel_mentions[0].id
-        s["step"] = 5
-        await message.channel.send("👤 Guest role?")
-        return
+        # =========================
+        # OVERVIEW FIXED
+        # =========================
+        if step == 3:
+            if c.lower() == "yes":
+                s["step"] = 0
+                await message.channel.send("⚙️ NEW alliance name:")
+                return
 
-    # STEP 5 - GUEST ROLE
-    if step == 5:
-        if not message.role_mentions:
+            text = "🧾 **SETUP OVERVIEW**\n\n"
+            for i, a in enumerate(s["alliances"], 1):
+                text += f"{i}. {a['alliance']} → {a['tag']} → <@&{a['role_id']}>\n"
+
+            text += "\n📸 Mention verification channel:"
+            s["step"] = 4
+            await message.channel.send(text)
             return
 
-        s["config"]["guest_role_id"] = message.role_mentions[0].id
-        s["step"] = 6
-        await message.channel.send("🪵 Log channel?")
-        return
+        if step == 4:
+            if not message.channel_mentions:
+                return
 
-    # STEP 6 - LOG CHANNEL
-    if step == 6:
-        if not message.channel_mentions:
+            s["config"]["channel_id"] = message.channel_mentions[0].id
+            s["step"] = 5
+            await message.channel.send("👤 Guest role?")
             return
 
-        s["config"]["log_channel_id"] = message.channel_mentions[0].id
-        s["step"] = 7
-        await message.channel.send("Confirm setup? (yes/no)")
-        return
+        if step == 5:
+            if not message.role_mentions:
+                return
 
-    # STEP 7 - SAVE
-    if step == 7:
-        if c.lower() != "yes":
+            s["config"]["guest_role_id"] = message.role_mentions[0].id
+            s["step"] = 6
+            await message.channel.send("🪵 Log channel?")
+            return
+
+        if step == 6:
+            if not message.channel_mentions:
+                return
+
+            s["config"]["log_channel_id"] = message.channel_mentions[0].id
+            s["step"] = 7
+            await message.channel.send("Confirm setup? (yes/no)")
+            return
+
+        if step == 7:
+            if c.lower() != "yes":
+                setup_sessions.pop(message.author.id)
+                await message.channel.send("❌ cancelled")
+                return
+
+            gid = message.guild.id
+
+            cursor.execute("INSERT OR REPLACE INTO guilds VALUES (?,?,?,?)",
+                (gid,
+                 s["config"]["channel_id"],
+                 s["config"]["guest_role_id"],
+                 s["config"]["log_channel_id"])
+            )
+
+            for a in s["alliances"]:
+                cursor.execute("""
+                INSERT INTO alliances (guild_id, alliance, tag, role_id)
+                VALUES (?,?,?,?)
+                """, (gid, a["alliance"], a["tag"], a["role_id"]))
+
+            conn.commit()
             setup_sessions.pop(message.author.id)
-            await message.channel.send("❌ cancelled")
+
+            await message.channel.send("✅ Setup complete!")
             return
 
-        gid = message.guild.id
-
-        cursor.execute("INSERT OR REPLACE INTO guilds VALUES (?,?,?,?)",
-            (gid,
-             s["config"]["channel_id"],
-             s["config"]["guest_role_id"],
-             s["config"]["log_channel_id"])
-        )
-
-        for a in s["alliances"]:
-            cursor.execute("""
-            INSERT INTO alliances (guild_id, alliance, tag, role_id)
-            VALUES (?,?,?,?)
-            """, (gid, a["alliance"], a["tag"], a["role_id"]))
-
-        conn.commit()
-        setup_sessions.pop(message.author.id)
-
-        await message.channel.send("✅ Setup complete!")
-        return
-
-# =========================
-# VERIFY SYSTEM
-# =========================
+    # =========================
+    # VERIFY SYSTEM
+    # =========================
     cursor.execute("SELECT channel_id, guest_role_id FROM guilds WHERE guild_id=?", (message.guild.id,))
     cfg = cursor.fetchone()
+
     if not cfg:
         return
 
@@ -341,14 +335,7 @@ async def on_message(message):
             await message.author.add_roles(guest)
             roles.append("Guest")
 
-        await send_log(
-            message.guild,
-            "APPROVED",
-            message.author,
-            message.author.id,
-            roles=roles
-        )
-
+        await send_log(message.guild, "APPROVED", message.author, message.author.id, roles=roles)
         await message.channel.send("✅ Verification approved!")
 
     else:
@@ -379,8 +366,5 @@ def home():
 def run_web():
     app.run(host="0.0.0.0", port=8080)
 
-# =========================
-# START
-# =========================
 Thread(target=run_web).start()
 bot.run(DISCORD_TOKEN)
