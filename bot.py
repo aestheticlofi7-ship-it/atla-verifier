@@ -2,38 +2,33 @@ import discord
 import os
 import time
 import sqlite3
+import json
 from dotenv import load_dotenv
 from openai import OpenAI
 from flask import Flask
 from threading import Thread
-from discord import app_commands
-import json
-import re
 
-import pytesseract
-from PIL import Image
-import requests
-from io import BytesIO
-
+# =========================
+# ENV
+# =========================
 load_dotenv()
-
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-client_ai = OpenAI(api_key=OPENAI_API_KEY)
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 # =========================
-# DISCORD SETUP
+# DISCORD
 # =========================
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
 bot = discord.Client(intents=intents)
-tree = app_commands.CommandTree(bot)
+tree = discord.app_commands.CommandTree(bot)
 
 # =========================
-# DATABASE
+# DB
 # =========================
 conn = sqlite3.connect("bot.db", check_same_thread=False)
 cursor = conn.cursor()
@@ -49,7 +44,6 @@ CREATE TABLE IF NOT EXISTS guilds (
 
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS alliances (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
     guild_id INTEGER,
     alliance TEXT,
     tag TEXT,
@@ -62,54 +56,21 @@ conn.commit()
 # =========================
 # MEMORY
 # =========================
-sessions = {}
+setup_sessions = {}
 processed = set()
 cooldown = {}
 
 # =========================
-# OCR
+# AI (VERY IMPORTANT FIX)
 # =========================
-def try_ocr(url):
-    try:
-        headers = {"User-Agent": "Mozilla/5.0"}
-        r = requests.get(url, headers=headers, timeout=10)
-        img = Image.open(BytesIO(r.content)).convert("RGB")
-        return pytesseract.image_to_string(img).lower()
-    except:
-        return ""
-
-# =========================
-# SAFE JSON PARSER
-# =========================
-def parse_json(text):
-    try:
-        text = text.strip()
-        text = re.sub(r"```json|```", "", text)
-
-        start = text.find("{")
-        end = text.rfind("}") + 1
-
-        if start == -1 or end == -1:
-            return None
-
-        return json.loads(text[start:end])
-
-    except Exception as e:
-        print("JSON ERROR:", e)
-        return None
-
-# =========================
-# AI ANALYSIS
-# =========================
-def analyze(url, guild_id):
+def analyze(image_url, guild_id):
     cursor.execute("SELECT alliance, tag FROM alliances WHERE guild_id=?", (guild_id,))
     alliances = cursor.fetchall()
 
-    valid = "\n".join([f"- {a} | {t}" for a, t in alliances])
-    ocr = try_ocr(url)
+    alliance_list = "\n".join([f"- {a} | {t}" for a, t in alliances])
 
     try:
-        res = client_ai.responses.create(
+        response = client.responses.create(
             model="gpt-4o-mini",
             input=[{
                 "role": "user",
@@ -120,53 +81,88 @@ def analyze(url, guild_id):
 You are a Discord verification AI.
 
 VALID ALLIANCES:
-{valid}
-
-OCR TEXT:
-{ocr}
+{alliance_list}
 
 RULES:
-- OCR may be wrong
-- IMAGE is leading source
-- If ANY alliance or tag is visible → APPROVE
-- Only reject if nothing matches at all
+- You MUST be LENIENT
+- If ANY text or logo looks like an alliance/tag → APPROVE
+- Only reject if image is totally empty or irrelevant
+- NEVER reject for unclear text
 
 Return ONLY JSON:
 {{
  "status": "APPROVED or REJECTED",
  "matches": [{{"alliance": "name"}}],
- "reason": "short reason"
+ "reason": "short explanation"
 }}
 """
                     },
                     {
                         "type": "input_image",
-                        "image_url": url
+                        "image_url": image_url
                     }
                 ]
             }]
         )
 
-        return res.output_text
+        return response.output_text.strip()
 
     except Exception as e:
-        print("AI ERROR:", e)
-        return '{"status":"REJECTED","matches":[],"reason":"AI failed"}'
+        return json.dumps({
+            "status": "REJECTED",
+            "matches": [],
+            "reason": f"AI error: {str(e)}"
+        })
 
 # =========================
-# SETUP COMMAND (FIXED STATE FLOW)
+# LOG EMBEDS (UPGRADED)
 # =========================
-@tree.command(name="setup", description="setup bot")
+async def send_log(guild, status, user, user_id, roles=None, reason=None):
+    cursor.execute("SELECT log_channel_id FROM guilds WHERE guild_id=?", (guild.id,))
+    row = cursor.fetchone()
+    if not row:
+        return
+
+    channel = guild.get_channel(row[0])
+    if not channel:
+        return
+
+    if status == "APPROVED":
+        embed = discord.Embed(
+            title="🟢 VERIFIED MEMBER",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="User", value=f"{user} ({user_id})", inline=False)
+        embed.add_field(name="Roles", value=", ".join(roles or ["None"]), inline=False)
+        embed.add_field(name="Status", value="Approved", inline=False)
+
+    else:
+        embed = discord.Embed(
+            title="🔴 REJECTED MEMBER",
+            color=discord.Color.red()
+        )
+        embed.add_field(name="User", value=f"{user} ({user_id})", inline=False)
+        embed.add_field(name="Reason", value=reason or "Unknown", inline=False)
+        embed.add_field(name="Action", value="Guest role assigned", inline=False)
+
+    embed.add_field(name="Time", value=time.strftime("%Y-%m-%d %H:%M:%S"))
+
+    await channel.send(embed=embed)
+
+# =========================
+# /setup COMMAND
+# =========================
+@tree.command(name="setup", description="Setup verification system")
 async def setup(interaction: discord.Interaction):
-    sessions[interaction.user.id] = {
-        "step": 1,
+    setup_sessions[interaction.user.id] = {
+        "step": 0,
         "alliances": [],
         "current": {},
         "config": {}
     }
 
     await interaction.response.send_message(
-        "🏷️ Typ alliance naam:",
+        "⚙️ Setup started\nEnter alliance name:",
         ephemeral=True
     )
 
@@ -176,67 +172,111 @@ async def setup(interaction: discord.Interaction):
 @bot.event
 async def on_ready():
     await tree.sync()
-    print("ONLINE")
+    print("Bot online")
 
 # =========================
-# MESSAGE FLOW (SETUP ENGINE)
+# SETUP FLOW (FIXED STATE MACHINE)
 # =========================
 @bot.event
 async def on_message(message):
     if message.author.bot or not message.guild:
         return
 
-    # =========================
-    # SETUP FLOW
-    # =========================
-    if message.author.id in sessions:
-        s = sessions[message.author.id]
+    # -------------------------
+    # SETUP MODE
+    # -------------------------
+    if message.author.id in setup_sessions:
+        s = setup_sessions[message.author.id]
         c = message.content.strip()
 
-        # STEP 1: alliance
+        if s["step"] == 0:
+            s["current"]["alliance"] = c
+            s["step"] = 1
+            await message.channel.send("Enter TAG:")
+            return
+
         if s["step"] == 1:
-            s["current"] = {"alliance": c}
-            s["step"] = 2
-            await message.channel.send("🏷️ TAG?")
-            return
-
-        # STEP 2: tag
-        if s["step"] == 2:
             s["current"]["tag"] = c
-            s["step"] = 3
-            await message.channel.send("⭐ ROLE MENTION?")
+            s["step"] = 2
+            await message.channel.send("Mention VERIFIED ROLE")
             return
 
-        # STEP 3: role
-        if s["step"] == 3:
+        if s["step"] == 2:
             if not message.role_mentions:
-                await message.channel.send("❌ mention role")
+                await message.channel.send("Mention a role!")
                 return
 
             s["current"]["role_id"] = message.role_mentions[0].id
             s["alliances"].append(s["current"])
-            s["step"] = 4
-            await message.channel.send("➕ nog eentje? yes/no")
+            s["current"] = {}
+            s["step"] = 3
+            await message.channel.send("Add another? (yes/no)")
             return
 
-        # STEP 4: loop or finish
-        if s["step"] == 4:
+        if s["step"] == 3:
             if c.lower() == "yes":
-                s["step"] = 1
-                await message.channel.send("🏷️ nieuwe alliance naam:")
+                s["step"] = 0
+                await message.channel.send("New alliance name:")
                 return
 
-            text = "SETUP DONE:\n\n"
-            for a in s["alliances"]:
-                text += f"{a['alliance']} → {a['tag']}\n"
-
-            await message.channel.send(text)
-            sessions.pop(message.author.id)
+            await message.channel.send("Mention verification channel")
+            s["step"] = 4
             return
 
-    # =========================
+        if s["step"] == 4:
+            if not message.channel_mentions:
+                return
+            s["config"]["channel_id"] = message.channel_mentions[0].id
+            s["step"] = 5
+            await message.channel.send("Guest role?")
+            return
+
+        if s["step"] == 5:
+            if not message.role_mentions:
+                return
+            s["config"]["guest_role_id"] = message.role_mentions[0].id
+            s["step"] = 6
+            await message.channel.send("Log channel?")
+            return
+
+        if s["step"] == 6:
+            if not message.channel_mentions:
+                return
+            s["config"]["log_channel_id"] = message.channel_mentions[0].id
+            s["step"] = 7
+            await message.channel.send("Confirm? (yes/no)")
+            return
+
+        if s["step"] == 7:
+            if c.lower() != "yes":
+                setup_sessions.pop(message.author.id)
+                await message.channel.send("Cancelled")
+                return
+
+            gid = message.guild.id
+
+            cursor.execute("INSERT OR REPLACE INTO guilds VALUES (?,?,?,?)",
+                (gid,
+                 s["config"]["channel_id"],
+                 s["config"]["guest_role_id"],
+                 s["config"]["log_channel_id"])
+            )
+
+            for a in s["alliances"]:
+                cursor.execute(
+                    "INSERT INTO alliances VALUES (?,?,?,?)",
+                    (gid, a["alliance"], a["tag"], a["role_id"])
+                )
+
+            conn.commit()
+            setup_sessions.pop(message.author.id)
+
+            await message.channel.send("Setup complete!")
+            return
+
+    # -------------------------
     # VERIFY SYSTEM
-    # =========================
+    # -------------------------
     cursor.execute("SELECT channel_id, guest_role_id FROM guilds WHERE guild_id=?", (message.guild.id,))
     cfg = cursor.fetchone()
 
@@ -257,24 +297,31 @@ async def on_message(message):
         return
     processed.add(att.url)
 
-    await message.channel.send("🔍 Checking...")
+    if cooldown.get(message.author.id, 0) > time.time():
+        return
 
-    data = parse_json(analyze(att.url, message.guild.id))
+    cooldown[message.author.id] = time.time() + 8
 
-    if not data:
-        data = {"status": "REJECTED", "matches": [], "reason": "parse fail"}
+    await message.channel.send("Checking...")
+
+    raw = analyze(att.url, message.guild.id)
+
+    try:
+        data = json.loads(raw)
+    except:
+        data = {"status": "REJECTED", "reason": "Invalid AI response", "matches": []}
 
     guest = message.guild.get_role(guest_role_id)
     roles = []
 
     if data["status"] == "APPROVED":
-
         for m in data.get("matches", []):
-            key = m.get("alliance")
+            name = m.get("alliance")
 
-            cursor.execute("""
-                SELECT role_id FROM alliances WHERE guild_id=? AND alliance=?
-            """, (message.guild.id, key))
+            cursor.execute(
+                "SELECT role_id FROM alliances WHERE guild_id=? AND alliance=?",
+                (message.guild.id, name)
+            )
 
             r = cursor.fetchone()
             if r:
@@ -283,19 +330,29 @@ async def on_message(message):
                     await message.author.add_roles(role)
                     roles.append(role.name)
 
-        if guest and not roles:
+        if guest:
             await message.author.add_roles(guest)
+            roles.append("Guest")
 
-        await message.channel.send("✅ APPROVED")
+        await send_log(message.guild, "APPROVED", message.author, message.author.id, roles)
+        await message.channel.send("✅ Approved!")
 
     else:
         if guest:
             await message.author.add_roles(guest)
 
-        await message.channel.send("❌ REJECTED")
+        await send_log(
+            message.guild,
+            "REJECTED",
+            message.author,
+            message.author.id,
+            reason=data.get("reason")
+        )
+
+        await message.channel.send("❌ Rejected → Guest assigned")
 
 # =========================
-# WEB SERVER
+# WEB SERVER (RAILWAY KEEP ALIVE)
 # =========================
 app = Flask(__name__)
 
@@ -303,6 +360,9 @@ app = Flask(__name__)
 def home():
     return "Bot running"
 
-Thread(target=app.run, kwargs={"host":"0.0.0.0","port":8080}).start()
+def run():
+    app.run(host="0.0.0.0", port=8080)
+
+Thread(target=run).start()
 
 bot.run(DISCORD_TOKEN)
