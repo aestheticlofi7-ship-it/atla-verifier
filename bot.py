@@ -95,7 +95,7 @@ user_cooldown = {}
 setup_sessions = {}
 
 # =========================
-# SAFE DELETE FIX
+# SAFE DELETE
 # =========================
 async def safe_delete(message):
     try:
@@ -105,16 +105,50 @@ async def safe_delete(message):
         pass
 
 # =========================
-# LOGS
+# 🔥 NEW LOG SYSTEM (FIXED EMBEDS)
 # =========================
-async def send_log(guild, text):
+async def send_log(guild, status, user, user_id, role_name=None, reason=None):
     config = load_guild(guild.id)
     if not config:
         return
 
     channel = guild.get_channel(config.get("log_channel_id"))
-    if channel:
-        await channel.send(text)
+    if not channel:
+        return
+
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+
+    # =========================
+    # APPROVED EMBED
+    # =========================
+    if status == "APPROVED":
+        embed = Embed(
+            title="🟢 VERIFIED MEMBER",
+            color=Color.green()
+        )
+
+        embed.add_field(name="User", value=f"{user} ({user_id})", inline=False)
+        embed.add_field(name="Role Given", value=role_name or "None", inline=False)
+        embed.add_field(name="Status", value="Approved", inline=False)
+        embed.add_field(name="Time", value=now, inline=False)
+        embed.set_footer(text="Memento Guard")
+
+    # =========================
+    # REJECTED EMBED
+    # =========================
+    else:
+        embed = Embed(
+            title="🔴 REJECTED MEMBER",
+            color=Color.red()
+        )
+
+        embed.add_field(name="User", value=f"{user} ({user_id})", inline=False)
+        embed.add_field(name="Reason", value=reason or "Unknown", inline=False)
+        embed.add_field(name="Action", value="Guest role assigned", inline=False)
+        embed.add_field(name="Time", value=now, inline=False)
+        embed.set_footer(text="Memento Guard")
+
+    await channel.send(embed=embed)
 
 # =========================
 # AI CHECK
@@ -152,58 +186,13 @@ REJECTED: <reason>
         return "REJECTED: AI error"
 
 # =========================
-# SETUP WIZARD
+# IMAGE CHECK
 # =========================
 @bot.event
 async def on_message(message):
     if message.author.bot or not message.guild:
         return
 
-    session = setup_sessions.get(message.author.id)
-
-    if session:
-        step = session["step"]
-        data = session["data"]
-        content = message.content.strip()
-
-        if step == 0:
-            data["alliance"] = content
-            await message.channel.send("🏷️ Step 2: Send TAG")
-
-        elif step == 1:
-            data["tag"] = content
-            await message.channel.send("📸 Step 3: Mention verification channel")
-
-        elif step == 2 and message.channel_mentions:
-            data["channel_id"] = message.channel_mentions[0].id
-            await message.channel.send("🟢 Step 4: Mention VERIFIED role")
-
-        elif step == 3 and message.role_mentions:
-            data["role_id"] = message.role_mentions[0].id
-            await message.channel.send("⭐ Step 5: Mention GUEST role")
-
-        elif step == 4 and message.role_mentions:
-            data["guest_role_id"] = message.role_mentions[0].id
-            await message.channel.send("📁 Step 6: Mention LOG channel")
-
-        elif step == 5 and message.channel_mentions:
-            data["log_channel_id"] = message.channel_mentions[0].id
-
-            save_guild(message.guild.id, data)
-            setup_sessions.pop(message.author.id, None)
-
-            await message.channel.send("✅ Setup completed successfully!")
-            return
-
-        session["data"] = data
-        session["step"] += 1
-
-        await safe_delete(message)
-        return
-
-    # =========================
-    # IMAGE CHECK
-    # =========================
     config = load_guild(message.guild.id)
     if not config:
         return
@@ -237,7 +226,7 @@ async def on_message(message):
     guest = message.guild.get_role(config.get("guest_role_id"))
 
     # =========================
-    # RESULT HANDLING (UPDATED)
+    # APPROVED
     # =========================
     if result.startswith("APPROVED"):
         if role:
@@ -245,67 +234,49 @@ async def on_message(message):
         if guest:
             await message.author.remove_roles(guest)
 
-        embed = Embed(
-            title="✅ Verification Approved",
-            description=f"{message.author.mention} has been approved!",
-            color=Color.green()
+        await message.channel.send(
+            embed=Embed(
+                title="✅ Verification Approved",
+                description=f"{message.author.mention} approved!",
+                color=Color.green()
+            )
         )
 
-        embed.add_field(
-            name="Role Given",
-            value=role.name if role else "None",
-            inline=False
+        await send_log(
+            message.guild,
+            "APPROVED",
+            message.author,
+            message.author.id,
+            role.name if role else "None"
         )
 
-        embed.set_footer(text="Memento Guard")
-
-        await message.channel.send(embed=embed)
-
-        log_text = (
-            f"✅ APPROVED\n"
-            f"User: {message.author} ({message.author.id})\n"
-            f"Role given: {role.name if role else 'None'}"
-        )
-        await send_log(message.guild, log_text)
-
+    # =========================
+    # REJECTED
+    # =========================
     else:
+        reason = result.replace("REJECTED:", "").strip()
+
         if guest:
             await message.author.add_roles(guest)
         if role:
             await message.author.remove_roles(role)
 
-        reason = result.replace("REJECTED:", "").strip()
-        guest_name = guest.name if guest else "Guest role"
-
-        embed = Embed(
-            title="❌ Verification Rejected",
-            description=f"{message.author.mention} has been rejected.",
-            color=Color.red()
+        await message.channel.send(
+            embed=Embed(
+                title="❌ Verification Rejected",
+                description=f"{message.author.mention} rejected.",
+                color=Color.red()
+            )
         )
 
-        embed.add_field(
-            name="Reason",
-            value=reason if reason else "No reason provided",
-            inline=False
+        await send_log(
+            message.guild,
+            "REJECTED",
+            message.author,
+            message.author.id,
+            guest.name if guest else "Guest role",
+            reason
         )
-
-        embed.add_field(
-            name="Role Given",
-            value=guest_name,
-            inline=False
-        )
-
-        embed.set_footer(text="Memento Guard")
-
-        await message.channel.send(embed=embed)
-
-        log_text = (
-            f"❌ REJECTED\n"
-            f"User: {message.author} ({message.author.id})\n"
-            f"Reason: {reason}\n"
-            f"Role given: {guest_name}"
-        )
-        await send_log(message.guild, log_text)
 
 # =========================
 # SETUP COMMAND
@@ -314,12 +285,11 @@ async def on_message(message):
 async def setup(interaction: discord.Interaction):
     setup_sessions[interaction.user.id] = {
         "step": 0,
-        "data": {},
-        "start": time.time()
+        "data": {}
     }
 
     await interaction.response.send_message(
-        "⚙️ Setup started.\nStep 1: Type your Alliance name",
+        "⚙️ Setup started\nStep 1: Alliance name",
         ephemeral=True
     )
 
@@ -342,5 +312,5 @@ async def on_ready():
 # =========================
 # START
 # =========================
-Thread(target=run_web).start()
+Thread(target=run_web, daemon=True).start()
 bot.run(DISCORD_TOKEN)
