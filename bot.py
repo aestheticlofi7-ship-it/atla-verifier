@@ -83,7 +83,7 @@ async def send_log(guild, status, user, user_id, roles=None, reason=None, action
     if status == "APPROVED":
         embed.add_field(name="Roles", value=", ".join(roles) if roles else "None", inline=False)
     else:
-        embed.add_field(name="Reason", value=reason or "No valid alliance or tag detected", inline=False)
+        embed.add_field(name="Reason", value=reason or "No alliance/tag detected", inline=False)
         embed.add_field(name="Action", value=action or "Guest role assigned", inline=False)
 
     embed.add_field(name="Time", value=time.strftime("%Y-%m-%d %H:%M:%S"), inline=False)
@@ -91,7 +91,7 @@ async def send_log(guild, status, user, user_id, roles=None, reason=None, action
     await ch.send(embed=embed)
 
 # =========================
-# AI PARSE (FIXED + STRICTER)
+# AI ANALYSIS (FIXED)
 # =========================
 def analyze(url, guild_id):
     cursor.execute("SELECT alliance, tag FROM alliances WHERE guild_id=?", (guild_id,))
@@ -108,22 +108,23 @@ def analyze(url, guild_id):
                     {
                         "type": "input_text",
                         "text": f"""
-You are a STRICT verification system.
+You are a strict Discord verification system.
 
-Valid alliances:
+VALID ALLIANCES:
 {data}
 
 RULES:
-- If BOTH alliance name AND tag are clearly visible → APPROVE
-- If either is missing or unclear → REJECT
-- NEVER guess
+- Look at the screenshot carefully.
+- If you see BOTH a valid alliance name AND tag → APPROVE
+- If you are unsure BUT it looks correct → still APPROVE
+- Only REJECT if nothing relevant is visible
 
 Return ONLY JSON:
 
 {{
  "status":"APPROVED or REJECTED",
  "matches":[{{"alliance":"name"}}],
- "reason":"short reason"
+ "reason":"short explanation"
 }}
 """
                     },
@@ -132,8 +133,9 @@ Return ONLY JSON:
             }]
         )
         return res.output_text.strip()
+
     except:
-        return '{"status":"REJECTED","matches":[],"reason":"AI failure or unclear screenshot"}'
+        return '{"status":"REJECTED","matches":[],"reason":"AI error"}'
 
 # =========================
 # SETUP COMMAND
@@ -172,7 +174,7 @@ async def on_ready():
     print("Online")
 
 # =========================
-# SETUP WIZARD (FIXED FLOW)
+# SETUP WIZARD
 # =========================
 @bot.event
 async def on_message(message):
@@ -217,7 +219,6 @@ async def on_message(message):
                 await message.channel.send("⚙️ NEW alliance name:")
                 return
 
-            # OVERVIEW FIXED
             text = "🧾 **SETUP OVERVIEW**\n\n"
             for i, a in enumerate(s["alliances"], 1):
                 text += f"{i}. {a['alliance']} → {a['tag']} → <@&{a['role_id']}>\n"
@@ -279,7 +280,7 @@ async def on_message(message):
             return
 
     # =========================
-    # VERIFY SYSTEM (FIXED LOGIC)
+    # VERIFY SYSTEM (FIXED FINAL)
     # =========================
     cursor.execute("SELECT channel_id, guest_role_id FROM guilds WHERE guild_id=?", (message.guild.id,))
     cfg = cursor.fetchone()
@@ -316,18 +317,16 @@ async def on_message(message):
         data = {
             "status": "REJECTED",
             "matches": [],
-            "reason": "No alliance name or tag detected"
+            "reason": "Could not read screenshot properly"
         }
 
     guest = message.guild.get_role(guest_role_id)
     roles = []
 
-    # =========================
-    # FIX: ONLY APPROVE IF REAL MATCH EXISTS
-    # =========================
-    if data.get("status") == "APPROVED" and data.get("matches"):
+    # ⭐ IMPORTANT FIX: ONLY CHECK STATUS
+    if data.get("status") == "APPROVED":
 
-        for m in data["matches"]:
+        for m in data.get("matches", []):
             cursor.execute("""
             SELECT role_id FROM alliances WHERE guild_id=? AND alliance=?
             """, (message.guild.id, m.get("alliance")))
