@@ -128,11 +128,23 @@ async def setup(interaction: discord.Interaction):
     await interaction.response.send_message("⚙️ Setup started", ephemeral=True)
 
 # =========================
-# READY
+# READY (STATUS ADDED)
 # =========================
 @bot.event
 async def on_ready():
     await tree.sync()
+
+    # 👇 Discord status (Carl-bot style)
+    activity = discord.Activity(
+        type=discord.ActivityType.playing,
+        name="/setup • Alliance Sentinel"
+    )
+
+    await bot.change_presence(
+        status=discord.Status.online,
+        activity=activity
+    )
+
     print("Online")
 
 # =========================
@@ -305,7 +317,7 @@ async def on_message(message):
         )
 
 # =========================
-# WEB SERVER (FIX ADDED)
+# WEB SERVER (FIX)
 # =========================
 app = Flask(__name__)
 
