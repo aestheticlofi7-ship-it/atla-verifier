@@ -9,6 +9,11 @@ from threading import Thread
 from discord import app_commands
 import json
 
+import pytesseract
+from PIL import Image
+import requests
+from io import BytesIO
+
 load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
@@ -61,6 +66,17 @@ processed = set()
 cooldown = {}
 
 # =========================
+# OCR FUNCTION
+# =========================
+def try_ocr(image_url):
+    try:
+        img = Image.open(BytesIO(requests.get(image_url).content))
+        text = pytesseract.image_to_string(img)
+        return text.lower()
+    except:
+        return ""
+
+# =========================
 # LOG SYSTEM
 # =========================
 async def send_log(guild, status, user, user_id, roles=None, reason=None, action=None):
@@ -83,7 +99,7 @@ async def send_log(guild, status, user, user_id, roles=None, reason=None, action
     if status == "APPROVED":
         embed.add_field(name="Roles", value=", ".join(roles) if roles else "None", inline=False)
     else:
-        embed.add_field(name="Reason", value=reason or "Could not detect valid alliance/tag", inline=False)
+        embed.add_field(name="Reason", value=reason or "No valid alliance/tag detected", inline=False)
         embed.add_field(name="Action", value=action or "Guest role assigned", inline=False)
 
     embed.add_field(name="Time", value=time.strftime("%Y-%m-%d %H:%M:%S"), inline=False)
@@ -91,13 +107,15 @@ async def send_log(guild, status, user, user_id, roles=None, reason=None, action
     await ch.send(embed=embed)
 
 # =========================
-# AI ANALYSIS (FIXED IMAGE RELIABILITY)
+# AI ANALYSIS (HYBRID OCR + VISION)
 # =========================
 def analyze(url, guild_id):
     cursor.execute("SELECT alliance, tag FROM alliances WHERE guild_id=?", (guild_id,))
     alliances = cursor.fetchall()
 
     data = "\n".join([f"- {a} | {t}" for a, t in alliances])
+
+    ocr_text = try_ocr(url)
 
     try:
         res = client_ai.responses.create(
@@ -113,12 +131,14 @@ You are a Discord verification AI.
 VALID ALLIANCES:
 {data}
 
-IMPORTANT RULES:
-- Read image carefully
-- Try OCR-like reading
-- Even partial matches count
-- If unsure → try to interpret instead of rejecting
-- Only reject if image is completely unreadable
+OCR TEXT (important):
+{ocr_text}
+
+RULES:
+- First check OCR text
+- If OCR contains alliance/tag → APPROVE
+- If unclear → use image
+- Only reject if NOTHING is visible in both
 
 Return ONLY JSON:
 
@@ -138,8 +158,8 @@ Return ONLY JSON:
         )
         return res.output_text.strip()
 
-    except Exception:
-        return '{"status":"REJECTED","matches":[],"reason":"AI image parsing failed"}'
+    except:
+        return '{"status":"REJECTED","matches":[],"reason":"AI/OCR failed"}'
 
 # =========================
 # SETUP COMMAND
@@ -165,11 +185,14 @@ async def setup(interaction: discord.Interaction):
 async def on_ready():
     await tree.sync()
 
+    activity = discord.Activity(
+        type=discord.ActivityType.playing,
+        name="/setup • Alliance Sentinel"
+    )
+
     await bot.change_presence(
-        activity=discord.Activity(
-            type=discord.ActivityType.playing,
-            name="/setup • Alliance Sentinel"
-        )
+        status=discord.Status.online,
+        activity=activity
     )
 
     print("Online")
@@ -182,6 +205,9 @@ async def on_message(message):
     if message.author.bot or message.guild is None:
         return
 
+    # =========================
+    # SETUP FLOW
+    # =========================
     if message.author.id in setup_sessions:
         s = setup_sessions[message.author.id]
         c = message.content.strip()
@@ -278,10 +304,11 @@ async def on_message(message):
             return
 
     # =========================
-    # VERIFY SYSTEM (FINAL FIX)
+    # VERIFY SYSTEM (FIXED)
     # =========================
     cursor.execute("SELECT channel_id, guest_role_id FROM guilds WHERE guild_id=?", (message.guild.id,))
     cfg = cursor.fetchone()
+
     if not cfg:
         return
 
@@ -306,7 +333,6 @@ async def on_message(message):
 
     await message.channel.send("🔍 Checking...")
 
-    # 🔥 FIX: try BOTH url + proxy_url
     image_url = att.proxy_url or att.url
 
     raw = analyze(image_url, message.guild.id)
@@ -345,6 +371,7 @@ async def on_message(message):
         await message.channel.send("✅ Verification approved!")
 
     else:
+
         if guest:
             await message.author.add_roles(guest)
 
