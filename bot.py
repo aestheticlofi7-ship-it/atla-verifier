@@ -83,7 +83,7 @@ async def send_log(guild, status, user, user_id, roles=None, reason=None, action
     if status == "APPROVED":
         embed.add_field(name="Roles", value=", ".join(roles) if roles else "None", inline=False)
     else:
-        embed.add_field(name="Reason", value=reason or "No valid alliance or tag found", inline=False)
+        embed.add_field(name="Reason", value=reason or "No valid alliance or tag detected", inline=False)
         embed.add_field(name="Action", value=action or "Guest role assigned", inline=False)
 
     embed.add_field(name="Time", value=time.strftime("%Y-%m-%d %H:%M:%S"), inline=False)
@@ -91,7 +91,7 @@ async def send_log(guild, status, user, user_id, roles=None, reason=None, action
     await ch.send(embed=embed)
 
 # =========================
-# AI PARSE (FIXED)
+# AI PARSE (FIXED + STRICTER)
 # =========================
 def analyze(url, guild_id):
     cursor.execute("SELECT alliance, tag FROM alliances WHERE guild_id=?", (guild_id,))
@@ -108,20 +108,22 @@ def analyze(url, guild_id):
                     {
                         "type": "input_text",
                         "text": f"""
-Return STRICT JSON ONLY.
+You are a STRICT verification system.
 
 Valid alliances:
 {data}
 
-If no clear match OR tag OR alliance is visible:
-return REJECTED with reason:
-"No valid alliance name or tag detected"
+RULES:
+- If BOTH alliance name AND tag are clearly visible → APPROVE
+- If either is missing or unclear → REJECT
+- NEVER guess
 
-Format:
+Return ONLY JSON:
+
 {{
  "status":"APPROVED or REJECTED",
  "matches":[{{"alliance":"name"}}],
- "reason":"string"
+ "reason":"short reason"
 }}
 """
                     },
@@ -131,7 +133,7 @@ Format:
         )
         return res.output_text.strip()
     except:
-        return '{"status":"REJECTED","matches":[],"reason":"No valid alliance name or tag detected"}'
+        return '{"status":"REJECTED","matches":[],"reason":"AI failure or unclear screenshot"}'
 
 # =========================
 # SETUP COMMAND
@@ -146,7 +148,7 @@ async def setup(interaction: discord.Interaction):
     }
 
     await interaction.response.send_message(
-        "⚙️ Setup started\n🏷️ Type your first alliance name in chat.",
+        "⚙️ Setup started\n🏷️ Type your first alliance name.",
         ephemeral=True
     )
 
@@ -170,7 +172,7 @@ async def on_ready():
     print("Online")
 
 # =========================
-# SETUP WIZARD
+# SETUP WIZARD (FIXED FLOW)
 # =========================
 @bot.event
 async def on_message(message):
@@ -215,6 +217,7 @@ async def on_message(message):
                 await message.channel.send("⚙️ NEW alliance name:")
                 return
 
+            # OVERVIEW FIXED
             text = "🧾 **SETUP OVERVIEW**\n\n"
             for i, a in enumerate(s["alliances"], 1):
                 text += f"{i}. {a['alliance']} → {a['tag']} → <@&{a['role_id']}>\n"
@@ -227,7 +230,6 @@ async def on_message(message):
         if step == 4:
             if not message.channel_mentions:
                 return
-
             s["config"]["channel_id"] = message.channel_mentions[0].id
             s["step"] = 5
             await message.channel.send("👤 Guest role?")
@@ -236,7 +238,6 @@ async def on_message(message):
         if step == 5:
             if not message.role_mentions:
                 return
-
             s["config"]["guest_role_id"] = message.role_mentions[0].id
             s["step"] = 6
             await message.channel.send("🪵 Log channel?")
@@ -245,7 +246,6 @@ async def on_message(message):
         if step == 6:
             if not message.channel_mentions:
                 return
-
             s["config"]["log_channel_id"] = message.channel_mentions[0].id
             s["step"] = 7
             await message.channel.send("Confirm setup? (yes/no)")
@@ -279,7 +279,7 @@ async def on_message(message):
             return
 
     # =========================
-    # VERIFY SYSTEM (FIXED)
+    # VERIFY SYSTEM (FIXED LOGIC)
     # =========================
     cursor.execute("SELECT channel_id, guest_role_id FROM guilds WHERE guild_id=?", (message.guild.id,))
     cfg = cursor.fetchone()
@@ -316,15 +316,18 @@ async def on_message(message):
         data = {
             "status": "REJECTED",
             "matches": [],
-            "reason": "No valid alliance name or tag detected"
+            "reason": "No alliance name or tag detected"
         }
 
     guest = message.guild.get_role(guest_role_id)
     roles = []
 
+    # =========================
+    # FIX: ONLY APPROVE IF REAL MATCH EXISTS
+    # =========================
     if data.get("status") == "APPROVED" and data.get("matches"):
 
-        for m in data.get("matches", []):
+        for m in data["matches"]:
             cursor.execute("""
             SELECT role_id FROM alliances WHERE guild_id=? AND alliance=?
             """, (message.guild.id, m.get("alliance")))
@@ -357,7 +360,7 @@ async def on_message(message):
             action="Guest role assigned"
         )
 
-        await message.channel.send("❌ Verification failed → Guest role given")
+        await message.channel.send("❌ Verification rejected → Guest role given")
 
 # =========================
 # WEB SERVER
