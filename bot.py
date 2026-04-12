@@ -56,6 +56,18 @@ CREATE TABLE IF NOT EXISTS guilds (
     log_channel_id INTEGER
 )
 """)
+
+# NEW: multi alliance table
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS alliances (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id INTEGER,
+    alliance TEXT,
+    tag TEXT,
+    role_id INTEGER
+)
+""")
+
 conn.commit()
 
 def save_guild(gid, data):
@@ -95,7 +107,7 @@ user_cooldown = {}
 setup_sessions = {}
 
 # =========================
-# SAFE DELETE FIX
+# SAFE DELETE
 # =========================
 async def safe_delete(message):
     try:
@@ -152,7 +164,41 @@ REJECTED: <reason>
         return "REJECTED: AI error"
 
 # =========================
-# SETUP WIZARD
+# SETUP COMMAND (MULTI-ALLIANCE)
+# =========================
+@tree.command(name="setup")
+async def setup(interaction: discord.Interaction):
+    setup_sessions[interaction.user.id] = {
+        "step": 0,
+        "alliances": [],
+        "current": {},
+        "confirming": False,
+        "start": time.time()
+    }
+
+    await interaction.response.send_message(
+        "⚙️ Setup started.\n\nStep 1: Type alliance name",
+        ephemeral=True
+    )
+
+# =========================
+# READY
+# =========================
+@bot.event
+async def on_ready():
+    await tree.sync()
+
+    await bot.change_presence(
+        activity=discord.Activity(
+            type=discord.ActivityType.playing,
+            name="/setup • Alliance Sentinel"
+        )
+    )
+
+    print(f"Online as {bot.user}")
+
+# =========================
+# MESSAGE HANDLER
 # =========================
 @bot.event
 async def on_message(message):
@@ -161,48 +207,85 @@ async def on_message(message):
 
     session = setup_sessions.get(message.author.id)
 
+    # =========================
+    # SETUP WIZARD
+    # =========================
     if session:
-        step = session["step"]
-        data = session["data"]
         content = message.content.strip()
 
+        # CONFIRM STEP
+        if session.get("confirming"):
+            if content.lower() == "yes":
+
+                for a in session["alliances"]:
+                    cursor.execute("""
+                    INSERT INTO alliances (guild_id, alliance, tag, role_id)
+                    VALUES (?, ?, ?, ?)
+                    """, (
+                        message.guild.id,
+                        a["alliance"],
+                        a["tag"],
+                        a["role_id"]
+                    ))
+
+                conn.commit()
+                setup_sessions.pop(message.author.id, None)
+
+                await message.channel.send("✅ Setup completed & saved!")
+                await safe_delete(message)
+                return
+
+            elif content.lower() == "no":
+                session["confirming"] = False
+                await message.channel.send("❌ Setup cancelled. Continue setup.")
+                await safe_delete(message)
+                return
+
+            return
+
+        step = session["step"]
+
         if step == 0:
-            data["alliance"] = content
+            session["current"]["alliance"] = content
             await message.channel.send("🏷️ Step 2: Send TAG")
 
         elif step == 1:
-            data["tag"] = content
-            await message.channel.send("📸 Step 3: Mention verification channel")
+            session["current"]["tag"] = content
+            await message.channel.send("⭐ Step 3: Mention VERIFIED role")
 
-        elif step == 2 and message.channel_mentions:
-            data["channel_id"] = message.channel_mentions[0].id
-            await message.channel.send("🟢 Step 4: Mention VERIFIED role")
+        elif step == 2 and message.role_mentions:
+            session["current"]["role_id"] = message.role_mentions[0].id
 
-        elif step == 3 and message.role_mentions:
-            data["role_id"] = message.role_mentions[0].id
-            await message.channel.send("⭐ Step 5: Mention GUEST role")
+            session["alliances"].append(session["current"])
+            session["current"] = {}
 
-        elif step == 4 and message.role_mentions:
-            data["guest_role_id"] = message.role_mentions[0].id
-            await message.channel.send("📁 Step 6: Mention LOG channel")
+            session["step"] = 3
 
-        elif step == 5 and message.channel_mentions:
-            data["log_channel_id"] = message.channel_mentions[0].id
-
-            save_guild(message.guild.id, data)
-            setup_sessions.pop(message.author.id, None)
-
-            await message.channel.send("✅ Setup completed successfully!")
+            await message.channel.send("➕ Alliance added! Add another? (yes/no)")
+            await safe_delete(message)
             return
 
-        session["data"] = data
-        session["step"] += 1
+        elif step == 3:
+            if content.lower() == "yes":
+                session["step"] = 0
+                await message.channel.send("⚙️ Step 1: Type alliance name")
+            else:
+
+                overview = "🧾 **You added:**\n\n"
+
+                for i, a in enumerate(session["alliances"], start=1):
+                    overview += f"{i}. {a['alliance']} → {a['tag']} → <@&{a['role_id']}>\n"
+
+                overview += "\nDo you want to confirm? (yes/no)"
+
+                session["confirming"] = True
+                await message.channel.send(overview)
 
         await safe_delete(message)
         return
 
     # =========================
-    # IMAGE CHECK
+    # IMAGE CHECK (UNCHANGED)
     # =========================
     config = load_guild(message.guild.id)
     if not config:
@@ -236,9 +319,6 @@ async def on_message(message):
     role = message.guild.get_role(config.get("role_id"))
     guest = message.guild.get_role(config.get("guest_role_id"))
 
-    # =========================
-    # RESULT HANDLING (UPDATED)
-    # =========================
     if result.startswith("APPROVED"):
         if role:
             await message.author.add_roles(role)
@@ -251,22 +331,7 @@ async def on_message(message):
             color=Color.green()
         )
 
-        embed.add_field(
-            name="Role Given",
-            value=role.name if role else "None",
-            inline=False
-        )
-
-        embed.set_footer(text="Memento Guard")
-
         await message.channel.send(embed=embed)
-
-        log_text = (
-            f"✅ APPROVED\n"
-            f"User: {message.author} ({message.author.id})\n"
-            f"Role given: {role.name if role else 'None'}"
-        )
-        await send_log(message.guild, log_text)
 
     else:
         if guest:
@@ -275,7 +340,6 @@ async def on_message(message):
             await message.author.remove_roles(role)
 
         reason = result.replace("REJECTED:", "").strip()
-        guest_name = guest.name if guest else "Guest role"
 
         embed = Embed(
             title="❌ Verification Rejected",
@@ -283,61 +347,9 @@ async def on_message(message):
             color=Color.red()
         )
 
-        embed.add_field(
-            name="Reason",
-            value=reason if reason else "No reason provided",
-            inline=False
-        )
-
-        embed.add_field(
-            name="Role Given",
-            value=guest_name,
-            inline=False
-        )
-
-        embed.set_footer(text="Memento Guard")
+        embed.add_field(name="Reason", value=reason or "No reason")
 
         await message.channel.send(embed=embed)
-
-        log_text = (
-            f"❌ REJECTED\n"
-            f"User: {message.author} ({message.author.id})\n"
-            f"Reason: {reason}\n"
-            f"Role given: {guest_name}"
-        )
-        await send_log(message.guild, log_text)
-
-# =========================
-# SETUP COMMAND
-# =========================
-@tree.command(name="setup")
-async def setup(interaction: discord.Interaction):
-    setup_sessions[interaction.user.id] = {
-        "step": 0,
-        "data": {},
-        "start": time.time()
-    }
-
-    await interaction.response.send_message(
-        "⚙️ Setup started.\nStep 1: Type your Alliance name",
-        ephemeral=True
-    )
-
-# =========================
-# READY
-# =========================
-@bot.event
-async def on_ready():
-    await tree.sync()
-
-    await bot.change_presence(
-        activity=discord.Activity(
-            type=discord.ActivityType.playing,
-            name="/setup • Alliance Sentinel"
-        )
-    )
-
-    print(f"Online as {bot.user}")
 
 # =========================
 # START
