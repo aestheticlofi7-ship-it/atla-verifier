@@ -23,7 +23,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client_ai = OpenAI(api_key=OPENAI_API_KEY)
 
 # =========================
-# DISCORD
+# DISCORD SETUP
 # =========================
 intents = discord.Intents.default()
 intents.message_content = True
@@ -33,7 +33,7 @@ bot = discord.Client(intents=intents)
 tree = app_commands.CommandTree(bot)
 
 # =========================
-# DB
+# DATABASE
 # =========================
 conn = sqlite3.connect("bot.db", check_same_thread=False)
 cursor = conn.cursor()
@@ -60,84 +60,53 @@ CREATE TABLE IF NOT EXISTS alliances (
 conn.commit()
 
 # =========================
-# SYSTEM
+# MEMORY
 # =========================
-setup_sessions = {}
+sessions = {}
 processed = set()
 cooldown = {}
 
 # =========================
 # OCR
 # =========================
-def try_ocr(image_url):
+def try_ocr(url):
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
-        r = requests.get(image_url, headers=headers, timeout=10)
+        r = requests.get(url, headers=headers, timeout=10)
         img = Image.open(BytesIO(r.content)).convert("RGB")
         return pytesseract.image_to_string(img).lower()
     except:
         return ""
 
 # =========================
-# SAFE JSON PARSER (🔥 FIX)
+# SAFE JSON PARSER
 # =========================
-def safe_json(raw):
+def parse_json(text):
     try:
-        raw = raw.strip()
+        text = text.strip()
+        text = re.sub(r"```json|```", "", text)
 
-        # remove markdown
-        raw = re.sub(r"```json|```", "", raw)
+        start = text.find("{")
+        end = text.rfind("}") + 1
 
-        start = raw.find("{")
-        end = raw.rfind("}") + 1
+        if start == -1 or end == -1:
+            return None
 
-        if start != -1 and end != -1:
-            raw = raw[start:end]
-
-        return json.loads(raw)
+        return json.loads(text[start:end])
 
     except Exception as e:
         print("JSON ERROR:", e)
-        print("RAW:", raw)
         return None
 
 # =========================
-# LOG SYSTEM
-# =========================
-async def send_log(guild, status, user, user_id, roles=None, reason=None, action=None):
-    cursor.execute("SELECT log_channel_id FROM guilds WHERE guild_id=?", (guild.id,))
-    row = cursor.fetchone()
-    if not row:
-        return
-
-    ch = guild.get_channel(row[0])
-    if not ch:
-        return
-
-    embed = discord.Embed(
-        title="🟢 APPROVED" if status == "APPROVED" else "🔴 REJECTED",
-        color=discord.Color.green() if status == "APPROVED" else discord.Color.red()
-    )
-
-    embed.add_field(name="User", value=f"{user} ({user_id})", inline=False)
-
-    if status == "APPROVED":
-        embed.add_field(name="Roles", value=", ".join(roles) if roles else "None", inline=False)
-    else:
-        embed.add_field(name="Reason", value=reason or "No match", inline=False)
-        embed.add_field(name="Action", value=action or "Guest role", inline=False)
-
-    await ch.send(embed=embed)
-
-# =========================
-# AI
+# AI ANALYSIS
 # =========================
 def analyze(url, guild_id):
     cursor.execute("SELECT alliance, tag FROM alliances WHERE guild_id=?", (guild_id,))
     alliances = cursor.fetchall()
 
-    data = "\n".join([f"- {a} | {t}" for a, t in alliances])
-    ocr_text = try_ocr(url)
+    valid = "\n".join([f"- {a} | {t}" for a, t in alliances])
+    ocr = try_ocr(url)
 
     try:
         res = client_ai.responses.create(
@@ -151,20 +120,18 @@ def analyze(url, guild_id):
 You are a Discord verification AI.
 
 VALID ALLIANCES:
-{data}
+{valid}
 
-OCR:
-{ocr_text}
+OCR TEXT:
+{ocr}
 
 RULES:
-- OCR can be wrong or empty
-- ALWAYS use image as main source
-- If ANY alliance OR tag is visible → APPROVE
-- Only reject if absolutely nothing matches
+- OCR may be wrong
+- IMAGE is leading source
+- If ANY alliance or tag is visible → APPROVE
+- Only reject if nothing matches at all
 
-IMPORTANT:
-Return ONLY valid JSON (no markdown, no text):
-
+Return ONLY JSON:
 {{
  "status": "APPROVED or REJECTED",
  "matches": [{{"alliance": "name"}}],
@@ -187,12 +154,21 @@ Return ONLY valid JSON (no markdown, no text):
         return '{"status":"REJECTED","matches":[],"reason":"AI failed"}'
 
 # =========================
-# SETUP
+# SETUP COMMAND (FIXED STATE FLOW)
 # =========================
 @tree.command(name="setup", description="setup bot")
 async def setup(interaction: discord.Interaction):
-    setup_sessions[interaction.user.id] = {"step": 0, "alliances": [], "config": {}}
-    await interaction.response.send_message("Start setup", ephemeral=True)
+    sessions[interaction.user.id] = {
+        "step": 1,
+        "alliances": [],
+        "current": {},
+        "config": {}
+    }
+
+    await interaction.response.send_message(
+        "🏷️ Typ alliance naam:",
+        ephemeral=True
+    )
 
 # =========================
 # READY
@@ -200,16 +176,67 @@ async def setup(interaction: discord.Interaction):
 @bot.event
 async def on_ready():
     await tree.sync()
-    print("Online")
+    print("ONLINE")
 
 # =========================
-# VERIFY
+# MESSAGE FLOW (SETUP ENGINE)
 # =========================
 @bot.event
 async def on_message(message):
     if message.author.bot or not message.guild:
         return
 
+    # =========================
+    # SETUP FLOW
+    # =========================
+    if message.author.id in sessions:
+        s = sessions[message.author.id]
+        c = message.content.strip()
+
+        # STEP 1: alliance
+        if s["step"] == 1:
+            s["current"] = {"alliance": c}
+            s["step"] = 2
+            await message.channel.send("🏷️ TAG?")
+            return
+
+        # STEP 2: tag
+        if s["step"] == 2:
+            s["current"]["tag"] = c
+            s["step"] = 3
+            await message.channel.send("⭐ ROLE MENTION?")
+            return
+
+        # STEP 3: role
+        if s["step"] == 3:
+            if not message.role_mentions:
+                await message.channel.send("❌ mention role")
+                return
+
+            s["current"]["role_id"] = message.role_mentions[0].id
+            s["alliances"].append(s["current"])
+            s["step"] = 4
+            await message.channel.send("➕ nog eentje? yes/no")
+            return
+
+        # STEP 4: loop or finish
+        if s["step"] == 4:
+            if c.lower() == "yes":
+                s["step"] = 1
+                await message.channel.send("🏷️ nieuwe alliance naam:")
+                return
+
+            text = "SETUP DONE:\n\n"
+            for a in s["alliances"]:
+                text += f"{a['alliance']} → {a['tag']}\n"
+
+            await message.channel.send(text)
+            sessions.pop(message.author.id)
+            return
+
+    # =========================
+    # VERIFY SYSTEM
+    # =========================
     cursor.execute("SELECT channel_id, guest_role_id FROM guilds WHERE guild_id=?", (message.guild.id,))
     cfg = cursor.fetchone()
 
@@ -230,22 +257,23 @@ async def on_message(message):
         return
     processed.add(att.url)
 
-    await message.channel.send("Checking...")
+    await message.channel.send("🔍 Checking...")
 
-    raw = analyze(att.url, message.guild.id)
-    data = safe_json(raw)
+    data = parse_json(analyze(att.url, message.guild.id))
+
+    if not data:
+        data = {"status": "REJECTED", "matches": [], "reason": "parse fail"}
 
     guest = message.guild.get_role(guest_role_id)
     roles = []
 
-    # 🔥 FIXED LOGIC
-    if data and data.get("status") == "APPROVED":
+    if data["status"] == "APPROVED":
 
         for m in data.get("matches", []):
             key = m.get("alliance")
 
             cursor.execute("""
-            SELECT role_id FROM alliances WHERE guild_id=? AND alliance=?
+                SELECT role_id FROM alliances WHERE guild_id=? AND alliance=?
             """, (message.guild.id, key))
 
             r = cursor.fetchone()
@@ -257,7 +285,6 @@ async def on_message(message):
 
         if guest and not roles:
             await message.author.add_roles(guest)
-            roles.append("Guest")
 
         await message.channel.send("✅ APPROVED")
 
@@ -268,7 +295,7 @@ async def on_message(message):
         await message.channel.send("❌ REJECTED")
 
 # =========================
-# WEB
+# WEB SERVER
 # =========================
 app = Flask(__name__)
 
