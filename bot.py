@@ -83,7 +83,7 @@ async def send_log(guild, status, user, user_id, roles=None, reason=None, action
     if status == "APPROVED":
         embed.add_field(name="Roles", value=", ".join(roles) if roles else "None", inline=False)
     else:
-        embed.add_field(name="Reason", value=reason or "No alliance/tag detected", inline=False)
+        embed.add_field(name="Reason", value=reason or "No valid alliance/tag detected", inline=False)
         embed.add_field(name="Action", value=action or "Guest role assigned", inline=False)
 
     embed.add_field(name="Time", value=time.strftime("%Y-%m-%d %H:%M:%S"), inline=False)
@@ -91,7 +91,7 @@ async def send_log(guild, status, user, user_id, roles=None, reason=None, action
     await ch.send(embed=embed)
 
 # =========================
-# AI ANALYSIS (FIXED)
+# AI ANALYSIS (FIXED IMAGE READING)
 # =========================
 def analyze(url, guild_id):
     cursor.execute("SELECT alliance, tag FROM alliances WHERE guild_id=?", (guild_id,))
@@ -108,16 +108,16 @@ def analyze(url, guild_id):
                     {
                         "type": "input_text",
                         "text": f"""
-You are a strict Discord verification system.
+You are a Discord verification AI.
 
 VALID ALLIANCES:
 {data}
 
 RULES:
-- Look at the screenshot carefully.
-- If you see BOTH a valid alliance name AND tag → APPROVE
-- If you are unsure BUT it looks correct → still APPROVE
-- Only REJECT if nothing relevant is visible
+- Look carefully at the screenshot
+- If you see ANY matching alliance name or tag → APPROVE
+- Only reject if NOTHING readable exists
+- If unclear → still try to match
 
 Return ONLY JSON:
 
@@ -128,14 +128,17 @@ Return ONLY JSON:
 }}
 """
                     },
-                    {"type": "input_image", "image_url": url}
+                    {
+                        "type": "input_image",
+                        "image_url": url
+                    }
                 ]
             }]
         )
         return res.output_text.strip()
 
-    except:
-        return '{"status":"REJECTED","matches":[],"reason":"AI error"}'
+    except Exception as e:
+        return '{"status":"REJECTED","matches":[],"reason":"AI failed to read image"}'
 
 # =========================
 # SETUP COMMAND
@@ -309,7 +312,8 @@ async def on_message(message):
 
     await message.channel.send("🔍 Checking...")
 
-    raw = analyze(att.url, message.guild.id)
+    # 🔥 FIX: use proxy_url for better image reading
+    raw = analyze(att.proxy_url, message.guild.id)
 
     try:
         data = json.loads(raw)
@@ -323,7 +327,6 @@ async def on_message(message):
     guest = message.guild.get_role(guest_role_id)
     roles = []
 
-    # ⭐ IMPORTANT FIX: ONLY CHECK STATUS
     if data.get("status") == "APPROVED":
 
         for m in data.get("matches", []):
