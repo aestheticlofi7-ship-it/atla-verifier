@@ -66,7 +66,7 @@ processed = set()
 cooldown = {}
 
 # =========================
-# OCR FUNCTION (FIXED)
+# OCR FUNCTION
 # =========================
 def try_ocr(image_url):
     try:
@@ -138,16 +138,20 @@ You are a Discord verification AI.
 VALID ALLIANCES:
 {data}
 
-OCR TEXT (important):
+OCR TEXT:
 {ocr_text}
 
 RULES:
-- OCR may be empty or incorrect
-- Always use image if OCR fails
-- Only reject if NOTHING is visible in both OCR and image
+- OCR may be empty or wrong
+- Always rely on IMAGE if OCR fails
+- If ANY alliance OR tag is visible → APPROVE
+- Only reject if NOTHING at all is visible
+
+IMPORTANT:
+- Be generous with approvals
+- False rejections are NOT allowed
 
 Return ONLY JSON:
-
 {{
  "status":"APPROVED or REJECTED",
  "matches":[{{"alliance":"name"}}],
@@ -211,6 +215,9 @@ async def on_message(message):
     if message.author.bot or message.guild is None:
         return
 
+    # -------------------------
+    # SETUP FLOW
+    # -------------------------
     if message.author.id in setup_sessions:
         s = setup_sessions[message.author.id]
         c = message.content.strip()
@@ -305,9 +312,9 @@ async def on_message(message):
             await message.channel.send("✅ Setup complete!")
             return
 
-    # =========================
-    # VERIFY SYSTEM (FIXED)
-    # =========================
+    # -------------------------
+    # VERIFY SYSTEM
+    # -------------------------
     cursor.execute("SELECT channel_id, guest_role_id FROM guilds WHERE guild_id=?", (message.guild.id,))
     cfg = cursor.fetchone()
 
@@ -335,7 +342,7 @@ async def on_message(message):
 
     await message.channel.send("🔍 Checking...")
 
-    image_url = att.url  # FIXED
+    image_url = att.url
 
     raw = analyze(image_url, message.guild.id)
 
@@ -351,12 +358,15 @@ async def on_message(message):
     guest = message.guild.get_role(guest_role_id)
     roles = []
 
-    if data.get("status") == "APPROVED" and data.get("matches"):
+    # 🔥 FIX: NO MORE STRICT MATCH CHECK
+    if data.get("status") == "APPROVED":
 
-        for m in data["matches"]:
+        for m in data.get("matches", []):
+            key = m.get("alliance") or m.get("name")
+
             cursor.execute("""
             SELECT role_id FROM alliances WHERE guild_id=? AND alliance=?
-            """, (message.guild.id, m.get("alliance")))
+            """, (message.guild.id, key))
 
             r = cursor.fetchone()
             if r:
@@ -373,7 +383,6 @@ async def on_message(message):
         await message.channel.send("✅ Verification approved!")
 
     else:
-
         if guest:
             await message.author.add_roles(guest)
 
