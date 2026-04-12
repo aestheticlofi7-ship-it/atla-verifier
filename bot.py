@@ -66,14 +66,21 @@ processed = set()
 cooldown = {}
 
 # =========================
-# OCR FUNCTION
+# OCR FUNCTION (FIXED)
 # =========================
 def try_ocr(image_url):
     try:
-        img = Image.open(BytesIO(requests.get(image_url).content))
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.get(image_url, headers=headers, timeout=10)
+        response.raise_for_status()
+
+        img = Image.open(BytesIO(response.content)).convert("RGB")
+
         text = pytesseract.image_to_string(img)
         return text.lower()
-    except:
+
+    except Exception as e:
+        print("OCR ERROR:", e)
         return ""
 
 # =========================
@@ -107,7 +114,7 @@ async def send_log(guild, status, user, user_id, roles=None, reason=None, action
     await ch.send(embed=embed)
 
 # =========================
-# AI ANALYSIS (HYBRID OCR + VISION)
+# AI ANALYSIS
 # =========================
 def analyze(url, guild_id):
     cursor.execute("SELECT alliance, tag FROM alliances WHERE guild_id=?", (guild_id,))
@@ -135,10 +142,9 @@ OCR TEXT (important):
 {ocr_text}
 
 RULES:
-- First check OCR text
-- If OCR contains alliance/tag → APPROVE
-- If unclear → use image
-- Only reject if NOTHING is visible in both
+- OCR may be empty or incorrect
+- Always use image if OCR fails
+- Only reject if NOTHING is visible in both OCR and image
 
 Return ONLY JSON:
 
@@ -205,9 +211,6 @@ async def on_message(message):
     if message.author.bot or message.guild is None:
         return
 
-    # =========================
-    # SETUP FLOW
-    # =========================
     if message.author.id in setup_sessions:
         s = setup_sessions[message.author.id]
         c = message.content.strip()
@@ -232,7 +235,6 @@ async def on_message(message):
 
             s["current"]["role_id"] = message.role_mentions[0].id
             s["alliances"].append(s["current"])
-            s["current"] = {}
             s["step"] = 3
             await message.channel.send("➕ Add another alliance? (yes/no)")
             return
@@ -333,7 +335,7 @@ async def on_message(message):
 
     await message.channel.send("🔍 Checking...")
 
-    image_url = att.proxy_url or att.url
+    image_url = att.url  # FIXED
 
     raw = analyze(image_url, message.guild.id)
 
