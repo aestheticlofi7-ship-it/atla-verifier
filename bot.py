@@ -7,11 +7,12 @@ from openai import OpenAI
 from flask import Flask
 from threading import Thread
 from discord import app_commands
+from discord.ui import View, Button
 
 load_dotenv()
 
 # =========================
-# 🔑 ENV KEYS
+# 🔑 ENV
 # =========================
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -19,17 +20,17 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client_ai = OpenAI(api_key=OPENAI_API_KEY)
 
 # =========================
-# ⚙️ DISCORD SETUP
+# ⚙️ DISCORD
 # =========================
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
 bot = discord.Client(intents=intents)
-tree = discord.app_commands.CommandTree(bot)
+tree = app_commands.CommandTree(bot)
 
 # =========================
-# 🌐 FLASK KEEP ALIVE
+# 🌐 FLASK
 # =========================
 app = Flask(__name__)
 
@@ -42,7 +43,7 @@ def run_web():
     app.run(host="0.0.0.0", port=port)
 
 # =========================
-# 🗄️ DATABASE
+# 🗄️ DB
 # =========================
 conn = sqlite3.connect("bot.db", check_same_thread=False)
 cursor = conn.cursor()
@@ -79,7 +80,6 @@ def save_guild(gid, data):
 def load_guild(gid):
     cursor.execute("SELECT * FROM guilds WHERE guild_id = ?", (gid,))
     row = cursor.fetchone()
-
     if not row:
         return None
 
@@ -93,10 +93,18 @@ def load_guild(gid):
     }
 
 # =========================
-# 🧠 SAFETY
+# 🧠 SYSTEM
 # =========================
 processed_images = set()
 user_cooldown = {}
+setup_sessions = {}
+
+def autosave(session, guild_id):
+    if session["step"] >= 1:
+        save_guild(guild_id, session["data"])
+
+def is_timeout(session):
+    return time.time() - session["start"] > 120
 
 # =========================
 # 🤖 AI CHECK
@@ -105,41 +113,31 @@ def analyze_image(url, alliance_name, tag):
     try:
         response = client_ai.responses.create(
             model="gpt-4o-mini",
-            input=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "input_text",
-                            "text": f"""
-Check this screenshot carefully.
-
-STRICT REQUIREMENTS:
-- Alliance must EXACTLY match: "{alliance_name}"
-- Player tag must EXACTLY contain: "{tag}"
+            input=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": f"""
+STRICT:
+Alliance: {alliance_name}
+Tag: {tag}
 
 Reply ONLY:
-
 APPROVED
-
 or
-
-REJECTED: <short reason>
+REJECTED: reason
 """
-                        },
-                        {
-                            "type": "input_image",
-                            "image_url": url
-                        }
-                    ]
-                }
-            ]
+                    },
+                    {
+                        "type": "input_image",
+                        "image_url": url
+                    }
+                ]
+            }]
         )
-
         return response.output_text.strip()
-
-    except Exception as e:
-        print("AI ERROR:", repr(e))
+    except:
         return "REJECTED: AI error"
 
 # =========================
@@ -150,70 +148,107 @@ async def send_log(guild, text):
     if not config:
         return
 
-    log_id = config.get("log_channel_id")
-    if not log_id:
-        return
-
-    channel = guild.get_channel(log_id)
+    channel = guild.get_channel(config.get("log_channel_id"))
     if channel:
         await channel.send(text)
 
 # =========================
-# ⚙️ SETUP COMMAND GROUP
+# 🧩 SETUP WIZARD UI
 # =========================
-setup_group = app_commands.Group(name="setup", description="Configure the bot")
-tree.add_command(setup_group)
+class SetupView(View):
+    def __init__(self, user_id):
+        super().__init__(timeout=120)
+        self.user_id = user_id
 
-def admin_only():
-    return app_commands.checks.has_permissions(administrator=True)
+    def get_session(self):
+        return setup_sessions.get(self.user_id)
 
-@setup_group.command(name="alliance")
-@admin_only()
-async def setup_alliance(interaction: discord.Interaction, name: str):
-    data = load_guild(interaction.guild.id) or {}
-    data["alliance"] = name
-    save_guild(interaction.guild.id, data)
-    await interaction.response.send_message(f"✅ Alliance: {name}", ephemeral=True)
+    async def update(self, interaction):
+        session = self.get_session()
+        if not session:
+            return
 
-@setup_group.command(name="tag")
-@admin_only()
-async def setup_tag(interaction: discord.Interaction, tag: str):
-    data = load_guild(interaction.guild.id) or {}
-    data["tag"] = tag
-    save_guild(interaction.guild.id, data)
-    await interaction.response.send_message(f"🏷️ Tag: {tag}", ephemeral=True)
+        steps = [
+            "Alliance name",
+            "Tag",
+            "Verification channel",
+            "Verified role",
+            "Guest role",
+            "Log channel"
+        ]
 
-@setup_group.command(name="channel")
-@admin_only()
-async def setup_channel(interaction: discord.Interaction, channel: discord.TextChannel):
-    data = load_guild(interaction.guild.id) or {}
-    data["channel_id"] = channel.id
-    save_guild(interaction.guild.id, data)
-    await interaction.response.send_message(f"📸 Channel: {channel.mention}", ephemeral=True)
+        step = session["step"]
 
-@setup_group.command(name="role")
-@admin_only()
-async def setup_role(interaction: discord.Interaction, role: discord.Role):
-    data = load_guild(interaction.guild.id) or {}
-    data["role_id"] = role.id
-    save_guild(interaction.guild.id, data)
-    await interaction.response.send_message(f"🟢 Role: {role.mention}", ephemeral=True)
+        content = f"""
+⚙️ Setup Wizard
 
-@setup_group.command(name="guest")
-@admin_only()
-async def setup_guest(interaction: discord.Interaction, role: discord.Role):
-    data = load_guild(interaction.guild.id) or {}
-    data["guest_role_id"] = role.id
-    save_guild(interaction.guild.id, data)
-    await interaction.response.send_message(f"⭐ Guest: {role.mention}", ephemeral=True)
+Step {step+1}/6
+➡️ {steps[step]}
+"""
 
-@setup_group.command(name="logs")
-@admin_only()
-async def setup_logs(interaction: discord.Interaction, channel: discord.TextChannel):
-    data = load_guild(interaction.guild.id) or {}
-    data["log_channel_id"] = channel.id
-    save_guild(interaction.guild.id, data)
-    await interaction.response.send_message(f"📁 Logs: {channel.mention}", ephemeral=True)
+        await interaction.response.edit_message(content=content, view=self)
+
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary)
+    async def back(self, interaction: discord.Interaction, button: Button):
+        session = self.get_session()
+        if not session:
+            return
+
+        if session["step"] > 0:
+            session["step"] -= 1
+
+        await self.update(interaction)
+
+    @discord.ui.button(label="Next", style=discord.ButtonStyle.primary)
+    async def next(self, interaction: discord.Interaction, button: Button):
+        session = self.get_session()
+        if not session:
+            return
+
+        autosave(session, interaction.guild.id)
+
+        session["step"] += 1
+
+        if session["step"] >= 6:
+            data = session["data"]
+
+            recap = f"""
+🧾 Confirm Setup:
+
+Alliance: {data.get("alliance")}
+Tag: {data.get("tag")}
+
+Type YES to confirm or NO to cancel
+"""
+            await interaction.response.edit_message(content=recap, view=None)
+            return
+
+        await self.update(interaction)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger)
+    async def cancel(self, interaction: discord.Interaction, button: Button):
+        setup_sessions.pop(self.user_id, None)
+        await interaction.response.edit_message(content="❌ Setup cancelled", view=None)
+
+# =========================
+# 🚀 SETUP START
+# =========================
+@tree.command(name="setup")
+async def setup(interaction: discord.Interaction):
+
+    setup_sessions[interaction.user.id] = {
+        "step": 0,
+        "data": {},
+        "start": time.time()
+    }
+
+    view = SetupView(interaction.user.id)
+
+    await interaction.response.send_message(
+        "⚙️ Setup Wizard Started",
+        view=view,
+        ephemeral=True
+    )
 
 # =========================
 # 🤖 READY
@@ -221,10 +256,10 @@ async def setup_logs(interaction: discord.Interaction, channel: discord.TextChan
 @bot.event
 async def on_ready():
     await tree.sync()
-    print(f"✅ Bot online as {bot.user}")
+    print(f"Bot online as {bot.user}")
 
 # =========================
-# 🤖 IMAGE VERIFICATION
+# 🤖 IMAGE CHECK
 # =========================
 @bot.event
 async def on_message(message):
@@ -241,17 +276,13 @@ async def on_message(message):
     if not message.attachments:
         return
 
-    attachment = message.attachments[0]
+    att = message.attachments[0]
 
-    if "image" not in (attachment.content_type or ""):
+    if att.url in processed_images:
         return
-
-    if attachment.url in processed_images:
-        return
-    processed_images.add(attachment.url)
+    processed_images.add(att.url)
 
     if user_cooldown.get(message.author.id, 0) > time.time():
-        await message.channel.send(f"⏳ {message.author.mention} cooldown active.")
         return
 
     user_cooldown[message.author.id] = time.time() + 10
@@ -259,7 +290,7 @@ async def on_message(message):
     await message.channel.send("🔍 Checking...")
 
     result = analyze_image(
-        attachment.url,
+        att.url,
         config.get("alliance", "UNKNOWN"),
         config.get("tag", "UNKNOWN")
     )
@@ -267,42 +298,24 @@ async def on_message(message):
     role = message.guild.get_role(config.get("role_id"))
     guest = message.guild.get_role(config.get("guest_role_id"))
 
-    # =========================
-    # 🟢 APPROVED
-    # =========================
-    if result.upper().startswith("APPROVED"):
+    if result.startswith("APPROVED"):
         if role:
             await message.author.add_roles(role)
         if guest:
             await message.author.remove_roles(guest)
 
-        msg = f"🔥 {message.author.mention} APPROVED — Welcome Member!"
+        msg = f"🔥 {message.author.mention} APPROVED"
         await message.channel.send(msg)
         await send_log(message.guild, msg)
 
-    # =========================
-    # ⭐ REJECTED
-    # =========================
     else:
         if guest:
             await message.author.add_roles(guest)
         if role:
             await message.author.remove_roles(role)
 
-        if "REJECTED:" in result:
-            reason = result.split("REJECTED:", 1)[1].strip()
-        else:
-            reason = ""
-
-        if not reason:
-            reason = "Requirements not met (alliance/tag check failed)"
-
-        msg = (
-            f"⭐ {message.author.mention} REJECTED\n"
-            f"Reason: {reason}\n"
-            f"Action: Guest role assigned"
-        )
-
+        reason = result.replace("REJECTED:", "").strip()
+        msg = f"⭐ {message.author.mention} REJECTED — {reason}"
         await message.channel.send(msg)
         await send_log(message.guild, msg)
 
