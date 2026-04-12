@@ -61,7 +61,7 @@ processed = set()
 cooldown = {}
 
 # =========================
-# AI FUNCTION (FIXED 100%)
+# AI ANALYZE (FIXED 100%)
 # =========================
 def analyze(image_url, guild_id):
     cursor.execute(
@@ -76,12 +76,13 @@ def analyze(image_url, guild_id):
         response = client.responses.create(
             model="gpt-4o-mini",
             response_format={"type": "json_object"},
-            input=[{
-                "role": "user",
-                "content": [
-                    {
-                        "type": "input_text",
-                        "text": f"""
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": f"""
 You are a Discord verification AI.
 
 VALID ALLIANCES:
@@ -99,14 +100,15 @@ Return ONLY JSON:
   "reason": "short explanation"
 }}
 """
-                    },
-                    {
-                        "type": "input_image",
-                        "image_url": image_url
-                    }
-                ]
-            })
-        
+                        },
+                        {
+                            "type": "input_image",
+                            "image_url": image_url
+                        }
+                    ]
+                }
+            )
+
         return response.output[0].content[0].text
 
     except Exception as e:
@@ -120,8 +122,12 @@ Return ONLY JSON:
 # LOGGING
 # =========================
 async def send_log(guild, status, user, user_id, roles=None, reason=None):
-    cursor.execute("SELECT log_channel_id FROM guilds WHERE guild_id=?", (guild.id,))
+    cursor.execute(
+        "SELECT log_channel_id FROM guilds WHERE guild_id=?",
+        (guild.id,)
+    )
     row = cursor.fetchone()
+
     if not row:
         return
 
@@ -141,6 +147,7 @@ async def send_log(guild, status, user, user_id, roles=None, reason=None):
         embed.add_field(name="Action", value="Guest role assigned", inline=False)
 
     embed.add_field(name="Time", value=time.strftime("%Y-%m-%d %H:%M:%S"))
+
     await channel.send(embed=embed)
 
 # =========================
@@ -321,7 +328,7 @@ async def on_message(message):
         data = {
             "status": "REJECTED",
             "matches": [],
-            "reason": "Invalid JSON from AI"
+            "reason": "Invalid JSON"
         }
 
     guest_role = message.guild.get_role(guest_role_id)
@@ -347,7 +354,7 @@ async def on_message(message):
             await message.author.add_roles(guest_role)
             roles.append("Guest")
 
-        await send_log(message.guild, "APPROVED", message.author, message.author.id, roles, None)
+        await send_log(message.guild, "APPROVED", message.author, message.author.id, roles)
         await message.channel.send("✅ Approved!")
 
     else:
@@ -377,7 +384,7 @@ def home():
 def run():
     app.run(host="0.0.0.0", port=8080)
 
-Thread(target=run).start()
+Thread(target=run, daemon=True).start()
 
 # =========================
 # RUN BOT
