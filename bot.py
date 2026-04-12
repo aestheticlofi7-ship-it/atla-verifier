@@ -145,6 +145,9 @@ async def on_message(message):
 
     s = setup_sessions.get(message.author.id)
 
+    # =========================
+    # SETUP FLOW FIXED MULTI
+    # =========================
     if s:
         c = message.content.strip()
         step = s["step"]
@@ -236,6 +239,9 @@ async def on_message(message):
             await message.channel.send("✅ setup done")
             return
 
+    # =========================
+    # VERIFY
+    # =========================
     cursor.execute("SELECT channel_id, guest_role_id, log_channel_id FROM guilds WHERE guild_id=?", (message.guild.id,))
     cfg = cursor.fetchone()
     if not cfg:
@@ -303,18 +309,6 @@ async def on_message(message):
         await send_log(message.guild,
             f"❌ REJECTED\nUser: {message.author} ({message.author.id})\nReason: {data.get('reason')}\nRole: Guest"
         )
-
-# =========================
-# WEB SERVER (FIX)
-# =========================
-app = Flask(__name__)
-
-@app.route("/")
-def home():
-    return "Bot is running"
-
-def run_web():
-    app.run(host="0.0.0.0", port=8080)
 
 # =========================
 # RUN
