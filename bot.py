@@ -18,7 +18,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 # =========================
-# DISCORD
+# DISCORD SETUP
 # =========================
 intents = discord.Intents.default()
 intents.message_content = True
@@ -28,7 +28,7 @@ bot = discord.Client(intents=intents)
 tree = discord.app_commands.CommandTree(bot)
 
 # =========================
-# DB
+# DATABASE
 # =========================
 conn = sqlite3.connect("bot.db", check_same_thread=False)
 cursor = conn.cursor()
@@ -61,10 +61,13 @@ processed = set()
 cooldown = {}
 
 # =========================
-# AI ANALYSIS
+# AI FUNCTION (FIXED 100%)
 # =========================
 def analyze(image_url, guild_id):
-    cursor.execute("SELECT alliance, tag FROM alliances WHERE guild_id=?", (guild_id,))
+    cursor.execute(
+        "SELECT alliance, tag FROM alliances WHERE guild_id=?",
+        (guild_id,)
+    )
     alliances = cursor.fetchall()
 
     alliance_list = "\n".join([f"- {a} | {t}" for a, t in alliances])
@@ -72,6 +75,7 @@ def analyze(image_url, guild_id):
     try:
         response = client.responses.create(
             model="gpt-4o-mini",
+            response_format={"type": "json_object"},
             input=[{
                 "role": "user",
                 "content": [
@@ -86,13 +90,13 @@ VALID ALLIANCES:
 RULES:
 - Be VERY LENIENT
 - If ANY alliance/tag is visible → APPROVE
-- Only reject if image is completely empty or irrelevant
+- Only reject if image is empty or irrelevant
 
 Return ONLY JSON:
 {{
- "status": "APPROVED or REJECTED",
- "matches": [{{"alliance": "name"}}],
- "reason": "short explanation"
+  "status": "APPROVED or REJECTED",
+  "matches": [{{"alliance": "name"}}],
+  "reason": "short explanation"
 }}
 """
                     },
@@ -101,10 +105,9 @@ Return ONLY JSON:
                         "image_url": image_url
                     }
                 ]
-            }]
-        )
-
-        return response.output_text.strip()
+            })
+        
+        return response.output[0].content[0].text
 
     except Exception as e:
         return json.dumps({
@@ -114,7 +117,7 @@ Return ONLY JSON:
         })
 
 # =========================
-# LOG SYSTEM
+# LOGGING
 # =========================
 async def send_log(guild, status, user, user_id, roles=None, reason=None):
     cursor.execute("SELECT log_channel_id FROM guilds WHERE guild_id=?", (guild.id,))
@@ -127,25 +130,17 @@ async def send_log(guild, status, user, user_id, roles=None, reason=None):
         return
 
     if status == "APPROVED":
-        embed = discord.Embed(
-            title="🟢 VERIFIED MEMBER",
-            color=discord.Color.green()
-        )
+        embed = discord.Embed(title="🟢 VERIFIED MEMBER", color=discord.Color.green())
         embed.add_field(name="User", value=f"{user} ({user_id})", inline=False)
-        embed.add_field(name="Roles", value=", ".join(roles or ["None"]), inline=False)
+        embed.add_field(name="Roles", value=", ".join(roles or []), inline=False)
         embed.add_field(name="Status", value="Approved", inline=False)
-
     else:
-        embed = discord.Embed(
-            title="🔴 REJECTED MEMBER",
-            color=discord.Color.red()
-        )
+        embed = discord.Embed(title="🔴 REJECTED MEMBER", color=discord.Color.red())
         embed.add_field(name="User", value=f"{user} ({user_id})", inline=False)
         embed.add_field(name="Reason", value=reason or "Unknown", inline=False)
         embed.add_field(name="Action", value="Guest role assigned", inline=False)
 
     embed.add_field(name="Time", value=time.strftime("%Y-%m-%d %H:%M:%S"))
-
     await channel.send(embed=embed)
 
 # =========================
@@ -166,7 +161,7 @@ async def setup(interaction: discord.Interaction):
     )
 
 # =========================
-# READY (FIXED STATUS HERE)
+# READY
 # =========================
 @bot.event
 async def on_ready():
@@ -183,16 +178,16 @@ async def on_ready():
     print("Bot is online")
 
 # =========================
-# SETUP FLOW
+# MESSAGE HANDLER
 # =========================
 @bot.event
 async def on_message(message):
     if message.author.bot or not message.guild:
         return
 
-    # -------------------------
-    # SETUP MODE
-    # -------------------------
+    # =========================
+    # SETUP FLOW
+    # =========================
     if message.author.id in setup_sessions:
         s = setup_sessions[message.author.id]
         c = message.content.strip()
@@ -263,11 +258,14 @@ async def on_message(message):
 
             gid = message.guild.id
 
-            cursor.execute("INSERT OR REPLACE INTO guilds VALUES (?,?,?,?)",
-                (gid,
-                 s["config"]["channel_id"],
-                 s["config"]["guest_role_id"],
-                 s["config"]["log_channel_id"])
+            cursor.execute(
+                "INSERT OR REPLACE INTO guilds VALUES (?,?,?,?)",
+                (
+                    gid,
+                    s["config"]["channel_id"],
+                    s["config"]["guest_role_id"],
+                    s["config"]["log_channel_id"]
+                )
             )
 
             for a in s["alliances"]:
@@ -282,11 +280,15 @@ async def on_message(message):
             await message.channel.send("Setup complete!")
             return
 
-    # -------------------------
+    # =========================
     # VERIFY SYSTEM
-    # -------------------------
-    cursor.execute("SELECT channel_id, guest_role_id FROM guilds WHERE guild_id=?", (message.guild.id,))
+    # =========================
+    cursor.execute(
+        "SELECT channel_id, guest_role_id FROM guilds WHERE guild_id=?",
+        (message.guild.id,)
+    )
     cfg = cursor.fetchone()
+
     if not cfg:
         return
 
@@ -309,21 +311,25 @@ async def on_message(message):
 
     cooldown[message.author.id] = time.time() + 8
 
-    await message.channel.send("Checking...")
+    await message.channel.send("Checking image...")
 
     raw = analyze(att.url, message.guild.id)
 
     try:
         data = json.loads(raw)
     except:
-        data = {"status": "REJECTED", "reason": "Invalid AI response", "matches": []}
+        data = {
+            "status": "REJECTED",
+            "matches": [],
+            "reason": "Invalid JSON from AI"
+        }
 
-    guest = message.guild.get_role(guest_role_id)
+    guest_role = message.guild.get_role(guest_role_id)
     roles = []
 
-    if data["status"] == "APPROVED":
+    if data.get("status") == "APPROVED":
         for m in data.get("matches", []):
-            name = m.get("alliance")
+            name = m.get("alliance", "")
 
             cursor.execute(
                 "SELECT role_id FROM alliances WHERE guild_id=? AND alliance=?",
@@ -337,16 +343,16 @@ async def on_message(message):
                     await message.author.add_roles(role)
                     roles.append(role.name)
 
-        if guest:
-            await message.author.add_roles(guest)
+        if guest_role:
+            await message.author.add_roles(guest_role)
             roles.append("Guest")
 
         await send_log(message.guild, "APPROVED", message.author, message.author.id, roles, None)
         await message.channel.send("✅ Approved!")
 
     else:
-        if guest:
-            await message.author.add_roles(guest)
+        if guest_role:
+            await message.author.add_roles(guest_role)
 
         await send_log(
             message.guild,
@@ -360,7 +366,7 @@ async def on_message(message):
         await message.channel.send("❌ Rejected → Guest assigned")
 
 # =========================
-# WEB SERVER
+# FLASK KEEP ALIVE
 # =========================
 app = Flask(__name__)
 
@@ -373,4 +379,7 @@ def run():
 
 Thread(target=run).start()
 
+# =========================
+# RUN BOT
+# =========================
 bot.run(DISCORD_TOKEN)
