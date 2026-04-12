@@ -92,10 +92,59 @@ def load_guild(gid):
 # =========================
 processed_images = set()
 user_cooldown = {}
+
+# 🔥 SETUP SESSIONS (FIXED)
 setup_sessions = {}
 
 # =========================
-# 🧠 FIX: SETUP INPUT HANDLER (NIEUW)
+# LOGS
+# =========================
+async def send_log(guild, text):
+    config = load_guild(guild.id)
+    if not config:
+        return
+
+    channel = guild.get_channel(config.get("log_channel_id"))
+    if channel:
+        await channel.send(text)
+
+# =========================
+# AI CHECK
+# =========================
+def analyze_image(url, alliance, tag):
+    try:
+        res = client_ai.responses.create(
+            model="gpt-4o-mini",
+            input=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": f"""
+Check screenshot.
+
+Alliance must match: {alliance}
+Tag must match: {tag}
+
+Return ONLY:
+APPROVED
+or
+REJECTED: <reason>
+"""
+                    },
+                    {
+                        "type": "input_image",
+                        "image_url": url
+                    }
+                ]
+            }]
+        )
+        return res.output_text.strip()
+    except:
+        return "REJECTED: AI error"
+
+# =========================
+# 🧠 SETUP WIZARD (FIXED + WORKING INPUT)
 # =========================
 @bot.event
 async def on_message(message):
@@ -103,17 +152,15 @@ async def on_message(message):
         return
 
     # =========================
-    # 🧩 SETUP INPUT FLOW
+    # 🧩 SETUP FLOW FIX
     # =========================
     session = setup_sessions.get(message.author.id)
 
     if session:
         step = session["step"]
         data = session["data"]
-
         content = message.content.strip()
 
-        # STEP MAP
         if step == 0:
             data["alliance"] = content
 
@@ -133,15 +180,13 @@ async def on_message(message):
             data["log_channel_id"] = message.channel_mentions[0].id
 
         session["data"] = data
-
-        # auto move next step
         session["step"] += 1
 
         await message.delete()
         return
 
     # =========================
-    # IMAGE CHECK (JOUW BESTAANDE LOGIC)
+    # IMAGE VERIFICATION
     # =========================
     config = load_guild(message.guild.id)
     if not config:
@@ -193,3 +238,39 @@ async def on_message(message):
 
     await message.channel.send(msg)
     await send_log(message.guild, msg)
+
+# =========================
+# SETUP COMMAND
+# =========================
+@tree.command(name="setup")
+async def setup(interaction: discord.Interaction):
+    setup_sessions[interaction.user.id] = {
+        "step": 0,
+        "data": {},
+        "start": time.time()
+    }
+
+    await interaction.response.send_message(
+        "⚙️ Setup started.\n\nStep 1: Send Alliance name",
+        ephemeral=True
+    )
+
+# =========================
+# READY
+# =========================
+@bot.event
+async def on_ready():
+    await tree.sync()
+    await bot.change_presence(
+        activity=discord.Activity(
+            type=discord.ActivityType.playing,
+            name="/setup • Memento Guard"
+        )
+    )
+    print(f"Online as {bot.user}")
+
+# =========================
+# START
+# =========================
+Thread(target=run_web).start()
+bot.run(DISCORD_TOKEN) 
