@@ -101,7 +101,7 @@ async def send_log(guild, text):
         await channel.send(text)
 
 # =========================
-# AI (MULTI-ALLIANCE)
+# AI
 # =========================
 def analyze_image(url, guild_id):
     try:
@@ -120,7 +120,7 @@ def analyze_image(url, guild_id):
                     {
                         "type": "input_text",
                         "text": f"""
-Check this screenshot.
+Check screenshot.
 
 Valid alliances:
 {alliance_list}
@@ -128,11 +128,7 @@ Valid alliances:
 Return ONLY JSON:
 {{
   "status": "APPROVED or REJECTED",
-  "matches": [
-    {{
-      "alliance": "name"
-    }}
-  ],
+  "matches": [{{"alliance": "name"}}],
   "reason": "if rejected"
 }}
 """
@@ -151,7 +147,7 @@ Return ONLY JSON:
         return '{"status":"REJECTED","matches":[],"reason":"AI error"}'
 
 # =========================
-# SETUP COMMAND
+# SETUP
 # =========================
 @tree.command(name="setup")
 async def setup(interaction: discord.Interaction):
@@ -159,7 +155,8 @@ async def setup(interaction: discord.Interaction):
         "step": 0,
         "alliances": [],
         "current": {},
-        "confirming": False
+        "confirming": False,
+        "config": {}
     }
 
     await interaction.response.send_message(
@@ -184,7 +181,7 @@ async def on_ready():
     print(f"Online as {bot.user}")
 
 # =========================
-# MESSAGE HANDLER (FIXED SETUP + MULTI AI)
+# MESSAGE HANDLER
 # =========================
 @bot.event
 async def on_message(message):
@@ -194,7 +191,7 @@ async def on_message(message):
     session = setup_sessions.get(message.author.id)
 
     # =========================
-    # SETUP WIZARD (FULL FIXED FLOW)
+    # SETUP WIZARD (FULL FIXED)
     # =========================
     if session:
         content = message.content.strip()
@@ -214,6 +211,22 @@ async def on_message(message):
                         a["tag"],
                         a["role_id"]
                     ))
+
+                # SAVE GUILD CONFIG (NEW FIX)
+                cursor.execute("""
+                INSERT OR REPLACE INTO guilds (
+                    guild_id, alliance, tag, channel_id,
+                    role_id, guest_role_id, log_channel_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    message.guild.id,
+                    session["alliances"][0]["alliance"],
+                    session["alliances"][0]["tag"],
+                    session["config"]["channel_id"],
+                    session["alliances"][0]["role_id"],
+                    session["config"]["guest_role_id"],
+                    session["config"]["log_channel_id"]
+                ))
 
                 conn.commit()
                 setup_sessions.pop(message.author.id, None)
@@ -254,12 +267,11 @@ async def on_message(message):
                 return
 
             session["current"]["role_id"] = message.role_mentions[0].id
-
             session["alliances"].append(session["current"])
             session["current"] = {}
-            session["step"] = 3
 
-            await message.channel.send("➕ Add another? (yes/no)")
+            session["step"] = 3
+            await message.channel.send("➕ Add another alliance? (yes/no)")
             await safe_delete(message)
             return
 
@@ -269,21 +281,65 @@ async def on_message(message):
                 session["step"] = 0
                 await message.channel.send("⚙️ Step 1: Type alliance name")
             else:
-                overview = "🧾 **You added:**\n\n"
+                session["step"] = 4
+                await message.channel.send("📌 Step 4: Mention VERIFICATION CHANNEL")
 
-                for i, a in enumerate(session["alliances"], start=1):
-                    overview += f"{i}. {a['alliance']} → {a['tag']} → <@&{a['role_id']}>\n"
+            await safe_delete(message)
+            return
 
-                overview += "\nConfirm? (yes/no)"
-                session["confirming"] = True
+        # STEP 4 VERIFICATION CHANNEL
+        elif step == 4:
+            if not message.channel_mentions:
+                await message.channel.send("❌ Mention verification channel")
+                await safe_delete(message)
+                return
 
-                await message.channel.send(overview)
+            session["config"]["channel_id"] = message.channel_mentions[0].id
+            session["step"] = 5
+            await message.channel.send("👤 Step 5: Mention GUEST role")
+            await safe_delete(message)
+            return
 
-        await safe_delete(message)
-        return
+        # STEP 5 GUEST ROLE
+        elif step == 5:
+            if not message.role_mentions:
+                await message.channel.send("❌ Mention guest role")
+                await safe_delete(message)
+                return
+
+            session["config"]["guest_role_id"] = message.role_mentions[0].id
+            session["step"] = 6
+            await message.channel.send("📁 Step 6: Mention LOG channel")
+            await safe_delete(message)
+            return
+
+        # STEP 6 LOG CHANNEL
+        elif step == 6:
+            if not message.channel_mentions:
+                await message.channel.send("❌ Mention log channel")
+                await safe_delete(message)
+                return
+
+            session["config"]["log_channel_id"] = message.channel_mentions[0].id
+
+            overview = "🧾 **Setup overview:**\n\n"
+
+            for i, a in enumerate(session["alliances"], start=1):
+                overview += f"{i}. {a['alliance']} → {a['tag']} → <@&{a['role_id']}>\n"
+
+            overview += f"\n📌 Verification: <#{session['config']['channel_id']}>\n"
+            overview += f"👤 Guest role: <@&{session['config']['guest_role_id']}>\n"
+            overview += f"📁 Log channel: <#{session['config']['log_channel_id']}>\n\n"
+            overview += "Confirm? (yes/no)"
+
+            session["confirming"] = True
+
+            await message.channel.send(overview)
+            await safe_delete(message)
+            return
 
     # =========================
-    # IMAGE CHECK (MULTI-ALLIANCE AI)
+    # IMAGE CHECK
     # =========================
     cursor.execute("SELECT channel_id, guest_role_id FROM guilds WHERE guild_id = ?", (message.guild.id,))
     cfg = cursor.fetchone()
@@ -323,7 +379,6 @@ async def on_message(message):
     role_given = False
 
     if data.get("status") == "APPROVED":
-
         for match in data.get("matches", []):
             name = match.get("alliance")
 
