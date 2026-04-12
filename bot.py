@@ -117,7 +117,7 @@ def analyze_image(url, guild_id):
                     {
                         "type": "input_text",
                         "text": f"""
-Return ONLY JSON (no markdown, no explanation).
+Return ONLY JSON.
 
 Valid alliances:
 {alliance_list}
@@ -144,7 +144,7 @@ FORMAT:
         return '{"status":"REJECTED","matches":[],"reason":"AI error"}'
 
 # =========================
-# SAFE JSON PARSER (FIX)
+# SAFE JSON PARSE
 # =========================
 def safe_parse_json(text):
     try:
@@ -207,30 +207,66 @@ async def on_message(message):
     session = setup_sessions.get(message.author.id)
 
     # =========================
-    # SETUP FLOW (FIXED FULL)
+    # SETUP FLOW
     # =========================
     if session:
-
         content = message.content.strip()
         step = session["step"]
 
-        # STEP 0 alliance
+        # =========================
+        # CONFIRM FIX (IMPORTANT)
+        # =========================
+        if session.get("confirming"):
+
+            if content.lower() == "yes":
+
+                for a in session["alliances"]:
+                    cursor.execute("""
+                    INSERT INTO alliances (guild_id, alliance, tag, role_id)
+                    VALUES (?, ?, ?, ?)
+                    """, (message.guild.id, a["alliance"], a["tag"], a["role_id"]))
+
+                cursor.execute("""
+                INSERT OR REPLACE INTO guilds (
+                    guild_id, channel_id, guest_role_id, log_channel_id
+                ) VALUES (?, ?, ?, ?)
+                """, (
+                    message.guild.id,
+                    session["config"]["channel_id"],
+                    session["config"]["guest_role_id"],
+                    session["config"]["log_channel_id"]
+                ))
+
+                conn.commit()
+
+                # 🔥 FIX: stop session completely
+                setup_sessions.pop(message.author.id, None)
+
+                await message.channel.send("✅ Setup completed successfully!")
+                return
+
+            elif content.lower() == "no":
+                setup_sessions.pop(message.author.id, None)
+                await message.channel.send("❌ Setup cancelled.")
+                return
+
+            return
+
+        # STEP 0
         if step == 0:
             session["current"]["alliance"] = content
             session["step"] = 1
             await message.channel.send("🏷️ Step 2: Send TAG")
-            await safe_delete(message)
             return
 
-        # STEP 1 tag (FIXED BUG)
+        # STEP 1
         if step == 1:
             session["current"]["tag"] = content
             session["step"] = 2
             await message.channel.send("⭐ Step 3: Mention VERIFIED role")
-            await safe_delete(message)
             return
 
-        # STEP 2 role
+        # STEP 2
         if step == 2:
             if not message.role_mentions:
                 await message.channel.send("❌ Mention a role")
@@ -242,10 +278,9 @@ async def on_message(message):
 
             session["step"] = 3
             await message.channel.send("➕ Add another? (yes/no)")
-            await safe_delete(message)
             return
 
-        # STEP 3 loop
+        # STEP 3
         if step == 3:
             if content.lower() == "yes":
                 session["step"] = 0
@@ -253,11 +288,9 @@ async def on_message(message):
             else:
                 session["step"] = 4
                 await message.channel.send("📌 Mention verification channel")
-
-            await safe_delete(message)
             return
 
-        # STEP 4 verification channel
+        # STEP 4
         if step == 4:
             if not message.channel_mentions:
                 await message.channel.send("❌ Mention channel")
@@ -268,7 +301,7 @@ async def on_message(message):
             await message.channel.send("👤 Mention guest role")
             return
 
-        # STEP 5 guest role
+        # STEP 5
         if step == 5:
             if not message.role_mentions:
                 await message.channel.send("❌ Mention role")
@@ -279,7 +312,7 @@ async def on_message(message):
             await message.channel.send("📁 Mention log channel")
             return
 
-        # STEP 6 log channel + confirm
+        # STEP 6
         if step == 6:
             if not message.channel_mentions:
                 await message.channel.send("❌ Mention channel")
@@ -293,49 +326,16 @@ async def on_message(message):
                 overview += f"{i}. {a['alliance']} → {a['tag']} → <@&{a['role_id']}>\n"
 
             overview += f"\nVerification: <#{session['config']['channel_id']}>\n"
-            overview += f"Guest Role: <@&{session['config']['guest_role_id']}>\n"
-            overview += f"Log Channel: <#{session['config']['log_channel_id']}>\n\n"
+            overview += f"Guest: <@&{session['config']['guest_role_id']}>\n"
+            overview += f"Logs: <#{session['config']['log_channel_id']}>\n\n"
             overview += "Confirm? (yes/no)"
 
             session["confirming"] = True
             await message.channel.send(overview)
             return
 
-        # CONFIRM
-        if session.get("confirming"):
-            if content.lower() == "yes":
-
-                for a in session["alliances"]:
-                    cursor.execute("""
-                    INSERT INTO alliances (guild_id, alliance, tag, role_id)
-                    VALUES (?, ?, ?, ?)
-                    """, (message.guild.id, a["alliance"], a["tag"], a["role_id"]))
-
-                cursor.execute("""
-                INSERT OR REPLACE INTO guilds VALUES (?, ?, ?, ?)
-                """, (
-                    message.guild.id,
-                    session["config"]["channel_id"],
-                    session["config"]["guest_role_id"],
-                    session["config"]["log_channel_id"]
-                ))
-
-                conn.commit()
-                setup_sessions.pop(message.author.id, None)
-
-                await message.channel.send("✅ Setup completed!")
-                return
-
-            if content.lower() == "no":
-                setup_sessions.pop(message.author.id, None)
-                await message.channel.send("❌ Setup cancelled.")
-                return
-
-        await safe_delete(message)
-        return
-
     # =========================
-    # VERIFICATION
+    # VERIFICATION SYSTEM
     # =========================
     cursor.execute("SELECT channel_id, guest_role_id FROM guilds WHERE guild_id = ?", (message.guild.id,))
     cfg = cursor.fetchone()
